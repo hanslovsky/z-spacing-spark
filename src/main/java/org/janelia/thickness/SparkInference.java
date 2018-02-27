@@ -1,8 +1,9 @@
 package org.janelia.thickness;
 
-import org.apache.spark.api.java.JavaPairRDD;
-import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.api.java.function.PairFunction;
+import java.util.Arrays;
+import java.util.stream.LongStream;
+
+import org.apache.spark.api.java.function.Function;
 import org.janelia.thickness.inference.InferFromMatrix;
 import org.janelia.thickness.inference.Options;
 import org.janelia.thickness.inference.fits.AbstractCorrelationFit;
@@ -10,109 +11,131 @@ import org.janelia.thickness.inference.fits.GlobalCorrelationFitAverage;
 import org.janelia.thickness.inference.fits.LocalCorrelationFitAverage;
 import org.janelia.thickness.inference.visitor.LazyVisitor;
 import org.janelia.thickness.inference.visitor.Visitor;
-import org.janelia.thickness.utility.Utility;
-import org.janelia.utility.MatrixStripConversion;
 
-import ij.process.FloatProcessor;
 import mpicbg.models.NotEnoughDataPointsException;
 import net.imglib2.Cursor;
+import net.imglib2.Point;
 import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.img.array.ArrayImg;
-import net.imglib2.img.array.ArrayImgs;
-import net.imglib2.img.basictypeaccess.array.DoubleArray;
+import net.imglib2.img.Img;
+import net.imglib2.img.array.ArrayImgFactory;
+import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.real.DoubleType;
-import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Intervals;
+import net.imglib2.util.Util;
 import net.imglib2.view.Views;
-import scala.Tuple2;
+import net.imglib2.view.composite.Composite;
+import net.imglib2.view.composite.RealComposite;
 
 public class SparkInference
 {
 
-	public static JavaPairRDD< Tuple2< Integer, Integer >, double[] > inferCoordinates( final JavaSparkContext sc, final JavaPairRDD< Tuple2< Integer, Integer >, FloatProcessor > matrices, final JavaPairRDD< Tuple2< Integer, Integer >, double[] > startingCoordinates, final Options options, final String pattern )
+	public static final class InputData< T, U extends RealType< U > >
 	{
-		final JavaPairRDD< Tuple2< Integer, Integer >, Tuple2< FloatProcessor, double[] > > matricesWithStartingCoordinates = matrices.join( startingCoordinates );
-		final JavaPairRDD< Tuple2< Integer, Integer >, double[] > result = matricesWithStartingCoordinates.mapToPair( new Inference< Tuple2< Integer, Integer > >( options, pattern ) );
+		public final RandomAccessibleInterval< RandomAccessibleInterval< T > > matrix;
 
-		return result;
+		public final RandomAccessibleInterval< ? extends Composite< U > > coordinates;
+
+		public InputData( final RandomAccessibleInterval< RandomAccessibleInterval< T > > matrix, final RandomAccessibleInterval< ? extends Composite< U > > coordinates )
+		{
+			super();
+			this.matrix = matrix;
+			this.coordinates = coordinates;
+		}
 	}
 
-	public static class Inference< K > implements PairFunction< Tuple2< K, Tuple2< FloatProcessor, double[] > >, K, double[] >
+	public static class Inference< T extends RealType< T > & NativeType< T >, U extends RealType< U > & NativeType< U > >
+	implements Function< InputData< T, U >, RandomAccessibleInterval< U > >
 	{
 		private static final long serialVersionUID = 8094812748656050753L;
 
 		private final Options options;
 
-		private final String pattern;
+		private final long sectionMin;
 
-		public Inference( final Options options, final String pattern )
+		private final long sectionMax;
+
+		public Inference( final Options options, final long numSections )
+		{
+			this( options, 0, numSections - 1 );
+		}
+
+		public Inference( final Options options, final long sectionMin, final long sectionMax )
 		{
 			super();
 			this.options = options;
-			this.pattern = pattern;
+			this.sectionMin = sectionMin;
+			this.sectionMax = sectionMax;
 		}
 
 		@Override
-		public Tuple2< K, double[] > call( final Tuple2< K, Tuple2< FloatProcessor, double[] > > t ) throws Exception
+		public RandomAccessibleInterval< U > call( final InputData< T, U > t ) throws Exception
 		{
 
-			//            if ( t._1().equals( Utility.tuple2( 10, 0 ) ) )
-			//                new FileSaver( new ImagePlus( "", t._2()._1().rebuild() ) ).saveAsTiff("/groups/saalfeld/home/hanslovskyp/matrix-spark.tif");
-			final FloatProcessor fp = t._2()._1();
-			final int w = fp.getWidth();
-			final int h = fp.getHeight();
-			final float[] d = ( float[] ) fp.getPixels();
-			final RandomAccessibleInterval< FloatType > matrix = w == h ? ArrayImgs.floats( d, w, h ) : MatrixStripConversion.stripToMatrix( ArrayImgs.floats( d, w, h ), new FloatType( Float.NaN ) );
+			final RandomAccessibleInterval< RandomAccessibleInterval< T > > matrices = t.matrix;
+			final RandomAccessibleInterval< ? extends Composite< U > > startingCoordinates = t.coordinates;
+			final long[] min = Intervals.minAsLongArray( matrices );
+			final long[] max = Intervals.maxAsLongArray( matrices );
+			assert Arrays.equals( Intervals.minAsLongArray( startingCoordinates ), min ) && Arrays.equals( Intervals.maxAsLongArray( startingCoordinates ), max );
 
-			// return starting coordinates if one of the values is nan or zero
-			for ( final Cursor< FloatType > c = Views.iterable( matrix ).cursor(); c.hasNext(); )
-			{
-				final float val = c.next().get();
-				final long x = c.getLongPosition( 0 );
-				final long y = c.getLongPosition( 1 );
-				if ( Math.abs( x - y ) <= options.comparisonRange && ( Float.isNaN( val ) || val == 0.0f ) )
-					return Utility.tuple2( t._1(), t._2()._2() );
-			}
+			final long[] coordinatesDims = LongStream.concat(
+					Arrays.stream( Intervals.dimensionsAsLongArray( startingCoordinates ) ),
+					LongStream.of( sectionMax - sectionMin + 1 ) ).toArray();
 
-			final AbstractCorrelationFit corrFit = options.estimateWindowRadius < 0 ? new GlobalCorrelationFitAverage() : new LocalCorrelationFitAverage( ( int ) matrix.dimension( 1 ), options );;
-			final InferFromMatrix inference = new InferFromMatrix( corrFit );
-			// InferFromMatrix inference = new
-			// InferFromMatrix(LocalizedCorrelationFitConstant.generateTranslation1D(),
-			// new OpinionMediatorWeightedAverage());
-			//            Visitor visitor = new Visitor() {
-			//                @Override
-			//                public <T extends RealType<T>> void act(int iteration, RandomAccessibleInterval<T> matrix, double[] lut, int[] permutation, int[] inversePermutation, double[] multipliers, double[] weights, RandomAccessibleInterval<double[]> estimatedFit) {
-			//                    System.out.println( "VISITOR: " + t._1() + Arrays.toString(lut) + " " + iteration);
-			//                    System.out.flush();
-			//                }
-			//            };
-			Visitor visitor = new LazyVisitor();
-			final ArrayImg< DoubleType, DoubleArray > img = ArrayImgs.doubles( t._2()._2().length, options.nIterations + 1 );
-			visitor = new WriteTransformationVisitor( img );
-			try
+			final Img< U > targetCoordinates = new ArrayImgFactory< U >().create( coordinatesDims, Util.getTypeFromInterval( t.coordinates ).get( sectionMin ).copy() );
+
+
+
+//			for ( final Cursor< FloatType > c = Views.iterable( matrix ).cursor(); c.hasNext(); )
+//			{
+//				final float val = c.next().get();
+//				final long x = c.getLongPosition( 0 );
+//				final long y = c.getLongPosition( 1 );
+//				if ( Math.abs( x - y ) <= options.comparisonRange && ( Float.isNaN( val ) || val == 0.0f ) ) {
+//					return Utility.tuple2( t._1(), t._2()._2() );
+//				}
+//			}
+			final Cursor< RandomAccessibleInterval< T > > matrixCursor = Views.flatIterable( matrices ).cursor();
+			final Cursor< ? extends Composite< U > > initialCoordinatesCursor = Views.flatIterable( startingCoordinates ).cursor();
+			final Cursor< RealComposite< U > > targetCoordinatesCursor = Views.flatIterable( Views.collapseReal( targetCoordinates ) ).cursor();
+			while ( matrixCursor.hasNext() )
 			{
-				final double[] coordinates = inference.estimateZCoordinates( matrix, t._2()._2(), visitor, options );
-				for ( final double c : coordinates )
-					if ( Double.isNaN( c ) )
+				final RandomAccessibleInterval< T > matrix = matrixCursor.next();
+				final Composite< U > initCoord = initialCoordinatesCursor.next();
+				final RealComposite< U > targetCoord = targetCoordinatesCursor.next();
+				final AbstractCorrelationFit corrFit = options.estimateWindowRadius < 0 ? new GlobalCorrelationFitAverage() : new LocalCorrelationFitAverage( ( int ) matrix.dimension( 1 ), options );;
+				final InferFromMatrix inference = new InferFromMatrix( corrFit );
+				final Visitor visitor = new LazyVisitor();
+				try
+				{
+					final double[] initialCoordinatesArray = new double[ ( int ) ( sectionMax - sectionMin ) ];
+					for ( int i = 0; i < initialCoordinatesArray.length; ++i )
 					{
-						System.err.println( "Inferred NaN value for coordinate " + t._1() );
-						return Utility.tuple2( t._1(), null );
+						initialCoordinatesArray[ i ] = initCoord.get( i + sectionMin ).getRealDouble();
 					}
-				//				final String path = String.format( pattern, t._1().toString() );
-				//				Files.createDirectories( new File( path ).getParentFile().toPath() );
-				//				new FileSaver( ImageJFunctions.wrapFloat( img, "" ) ).saveAsTiff( path );
-				return Utility.tuple2( t._1(), coordinates );
+					final double[] coordinates = inference.estimateZCoordinates( matrix, initialCoordinatesArray, visitor, options );
+					boolean coordinatesAreFinite = true;
+					for ( final double c : coordinates )
+					{
+						if ( Double.isNaN( c ) )
+						{
+							System.err.println( "Inferred NaN value for coordinate " + new Point( matrixCursor ) );
+							coordinatesAreFinite = false;
+							break;
+						}
+					}
+					for ( long m = sectionMin, i = 0; m < sectionMax; ++m, ++i )
+					{
+						targetCoord.get( m ).setReal( coordinatesAreFinite ? coordinates[ ( int ) i ] : initCoord.get( m ).getRealDouble() );
+					}
+				}
+				catch ( final NotEnoughDataPointsException e )
+				{
+					System.err.println( "Fail at inference for coordinate " + new Point( matrixCursor ) );
+					e.printStackTrace( System.err );
+				}
 			}
-			catch ( final NotEnoughDataPointsException e )
-			{
-				//                String msg = e.getMessage();
-				//                new ImagePlus(t._1().toString(),t._2()._1().rebuild()).show();
-				System.err.println( "Fail at inference for coordinate " + t._1() );
-				e.printStackTrace( System.err );
-				return Utility.tuple2( t._1(), null );
-				//                throw e;
-				//                throw new NotEnoughDataPointsException( t._1() + " " + msg );
-			}
+			return Views.translate( targetCoordinates, Intervals.minAsLongArray( t.coordinates ) );
 		}
 	}
 
@@ -131,7 +154,9 @@ public class SparkInference
 		{
 			final Cursor< DoubleType > current = Views.flatIterable( Views.hyperSlice( img, 1, iteration ) ).cursor();
 			for ( int z = 0; current.hasNext(); ++z )
+			{
 				current.next().set( lut[ z ] );
+			}
 		}
 
 	}
