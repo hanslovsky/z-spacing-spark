@@ -16,7 +16,6 @@ import org.kohsuke.args4j.Argument;
 
 import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
-import net.imglib2.Point;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.img.Img;
@@ -94,9 +93,9 @@ public class MatricesFromN5
 			) {
 		double correlation = 0.0;
 		final RandomAccess< T > access = integral.randomAccess();
-		System.out.println( "ACCESSING: " +
-				Point.wrap( Intervals.minAsLongArray( interval ) ) + " " + Point.wrap( Intervals.maxAsLongArray( interval ) ) + " " +
-				Point.wrap( Intervals.minAsLongArray( integral ) ) + " " + Point.wrap( Intervals.maxAsLongArray( integral ) ) );
+//		System.out.println( "ACCESSING: " +
+//				Point.wrap( Intervals.minAsLongArray( interval ) ) + " " + Point.wrap( Intervals.maxAsLongArray( interval ) ) + " " +
+//				Point.wrap( Intervals.minAsLongArray( integral ) ) + " " + Point.wrap( Intervals.maxAsLongArray( integral ) ) );
 		interval.min( access );
 		correlation += access.get().getRealDouble();
 		access.setPosition( interval.max( 0 ), 0 );
@@ -166,7 +165,11 @@ public class MatricesFromN5
 			Arrays.setAll( min, d -> block[ d ] * step[ d ] );
 			Arrays.setAll( max, d -> Math.min( min[ d ] + 2 * radius[ d ] + 1, this.max[ d ] ) );
 			populateMatrix( writer, datasetSum, datasetSumSquared, radius, step, size, range, Views.hyperSlice( Views.hyperSlice( matrix, 0, 0 ), 0, 0 ), new FinalInterval( min, max ) );
-			N5Utils.saveBlock( matrix, writer, datasetMatrix, LongStream.concat( Arrays.stream( block ), LongStream.of( range, size ) ).toArray() );
+			final long[] blockPosition = LongStream.concat( Arrays.stream( block ), LongStream.of( 0, 0 ) ).toArray();
+//			final StringBuilder vals = new StringBuilder();
+//			Views.flatIterable( matrix ).forEach( v -> vals.append( v.getRealDouble() ).append( ", " ) );
+//			System.out.println( "STORING BLOCK AT " + Arrays.toString( blockPosition ) + " " + vals.toString() );
+			N5Utils.saveBlock( matrix, writer, datasetMatrix, blockPosition );
 
 		}
 
@@ -204,6 +207,7 @@ public class MatricesFromN5
 					// TODO calculate correlation from sumX, sumY, sumXX,
 					// sumYY, sumXY for interval defined by correlationMin,
 					// correlationMax
+//					System.out.println( "CORRELATION IS " + correlation );
 					matrixAccess.get().setReal( correlation );
 				}
 			}

@@ -102,14 +102,14 @@ public class MakeMatrices
 		{
 			LogManager.getRootLogger().setLevel( Level.ERROR );
 
-//			GenerateIntegralImages.run(
-//					sc,
-//					filenames,
-//					cmdLineArgs.integralImageBlockSize,
-//					cmdLineArgs.range[ 0 ],
-//					cmdLineArgs.root,
-//					"integral-sum",
-//					"integral-sum-squared" );
+			GenerateIntegralImages.run(
+					sc,
+					filenames,
+					cmdLineArgs.integralImageBlockSize,
+					cmdLineArgs.range[ 0 ],
+					cmdLineArgs.root,
+					"integral-sum",
+					"integral-sum-squared" );
 
 			final long[] stepSizes = new long[ 2 ];
 			final long[] radii = new long[ 2 ];
