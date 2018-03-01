@@ -159,7 +159,7 @@ public class MatricesFromN5
 		public void call( final long[] block ) throws Exception
 		{
 			final N5Writer writer = ZSpacing.n5Writer( root );
-			final Img< U > matrix = new ArrayImgFactory< U >().create( new long[] { 1, 1, range, size }, matrixType.getValue() );
+			final Img< U > matrix = new ArrayImgFactory< U >().create( new long[] { 1, 1, range + 1, size }, matrixType.getValue() );
 			final long[] min = new long[ block.length ];
 			final long[] max = new long[ block.length ];
 			Arrays.setAll( min, d -> block[ d ] * step[ d ] );
@@ -190,6 +190,7 @@ public class MatricesFromN5
 			final RandomAccessibleInterval< T > sumSquared = N5Utils.< T >open( reader, datasetSumSquared );
 
 			initialize( matrix, Double.NaN );
+			Views.hyperSlice( matrix, 0, 0L ).forEach( U::setOne );
 			final net.imglib2.RandomAccess< U > matrixAccess = matrix.randomAccess();
 
 			for ( long z1 = 0; z1 < size; ++z1 )
@@ -197,7 +198,7 @@ public class MatricesFromN5
 				matrixAccess.setPosition( z1, 1 );
 				final IntervalView< T > sumX = Views.hyperSlice( sum, 2, z1 );
 				final IntervalView< T > sumXX = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z1 ), 2, z1 );
-				for ( long z2 = z1 + 1, r = 0; z2 < size && r < range; ++z2, ++r )
+				for ( long z2 = z1 + 1, r = 1; z2 < size && r <= range; ++z2, ++r )
 				{
 					final IntervalView< T > sumY = Views.hyperSlice( sum, 2, z2 );
 					final IntervalView< T > sumYY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z2 ), 2, z2 );

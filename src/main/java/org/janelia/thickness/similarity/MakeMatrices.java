@@ -42,7 +42,6 @@ public class MakeMatrices
 		@Parameters( index = "1", description = "N5 root for integral images and matrices." )
 		private String root;
 
-
 		final int[] defaultIntegralImageBlockSize = { 1000, 1000 };
 
 		@Option(
@@ -116,15 +115,17 @@ public class MakeMatrices
 			final DatasetAttributes integralSumAttrs = ZSpacing.n5( cmdLineArgs.root ).getDatasetAttributes( "integral-sum" );
 			final long[] imgDim = Arrays.stream( integralSumAttrs.getDimensions() ).limit( 2 ).map( l -> l - 1 ).toArray();
 
-			for ( int d = 0; d < stepSizes.length; ++d ) {
-				stepSizes[ d ] = imgDim [ d ];
+			for ( int d = 0; d < stepSizes.length; ++d )
+			{
+				stepSizes[ d ] = imgDim[ d ];
 				radii[ d ] = stepSizes[ d ] / 2;
 			}
 
 			for ( int level = 0; level < cmdLineArgs.range.length; ++level )
 			{
 
-				if ( Arrays.stream( radii ).filter( r -> r > 1 ).count() == 0 ) {
+				if ( Arrays.stream( radii ).filter( r -> r > 1 ).count() == 0 )
+				{
 					break;
 				}
 
@@ -138,11 +139,11 @@ public class MakeMatrices
 				final long[] maxPosition = new long[] { 0, 0 };
 				positions.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
 				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
-				final long[] datasetDims = LongStream.concat( Arrays.stream( currentDim ), LongStream.of( range, filenames.size() ) ).toArray();
+				final long[] datasetDims = LongStream.concat( Arrays.stream( currentDim ), LongStream.of( range + 1, filenames.size() ) ).toArray();
 
 				final String matrixDataset = level + "/matrices";
 
-				ZSpacing.n5Writer( cmdLineArgs.root ).createDataset( matrixDataset, datasetDims, new int[] { 1, 1, range, filenames.size() }, DataType.FLOAT64, new GzipCompression() );
+				ZSpacing.n5Writer( cmdLineArgs.root ).createDataset( matrixDataset, datasetDims, new int[] { 1, 1, range + 1, filenames.size() }, DataType.FLOAT64, new GzipCompression() );
 
 				MatricesFromN5.makeMatrices(
 						blocksRDD,
@@ -157,7 +158,6 @@ public class MakeMatrices
 						matrixDataset,
 						new GzipCompression(),
 						sc.broadcast( new DoubleType() ) );
-
 
 				for ( int d = 0; d < stepSizes.length; ++d )
 				{
