@@ -26,7 +26,7 @@ public class CollapsedRandomAccess< T > extends Point implements RandomAccess< R
 		RandomAccessibleInterval< T > result = source;
 		for ( int dim = 0; dim < position.length; ++dim )
 		{
-			result = Views.hyperSlice( source, dim, position[ dim ] );
+			result = Views.hyperSlice( result, 0, position[ dim ] );
 		}
 		return result;
 	}
