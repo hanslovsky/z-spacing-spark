@@ -11,8 +11,8 @@ import org.janelia.saalfeldlab.n5.Compression;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
-import org.janelia.thickness.ZSpacing;
 import org.janelia.thickness.utility.DataTypeMatcher;
+import org.janelia.thickness.utility.N5Helpers;
 
 import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
@@ -45,7 +45,7 @@ public class MatricesFromN5
 			final Broadcast< U > matrixType ) throws IllegalArgumentException, IOException
 	{
 		final long[] datasetDims = LongStream.concat( Arrays.stream( dim ), LongStream.of( 2 * range + 1, size ) ).toArray();
-		ZSpacing.n5Writer( root ).createDataset(
+		N5Helpers.n5Writer( root ).createDataset(
 				datasetMatrix,
 				datasetDims,
 				new int[] { 1, 1, 2 * range + 1, ( int ) size },
@@ -155,7 +155,7 @@ public class MatricesFromN5
 		@Override
 		public void call( final long[] block ) throws Exception
 		{
-			final N5Writer writer = ZSpacing.n5Writer( root );
+			final N5Writer writer = N5Helpers.n5Writer( root );
 			final Img< U > matrix = new ArrayImgFactory< U >().create( new long[] { 1, 1, 2 * range + 1, size }, matrixType.getValue() );
 			final long[] min = new long[ block.length ];
 			final long[] max = new long[ block.length ];

@@ -13,7 +13,7 @@ import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
-import org.janelia.thickness.ZSpacing;
+import org.janelia.thickness.utility.N5Helpers;
 
 import ij.ImagePlus;
 import net.imglib2.RandomAccessibleInterval;
@@ -47,7 +47,7 @@ public class GenerateIntegralImages
 		{
 			final ImagePlus img = new ImagePlus( filenames.get( 0 ) );
 			final long[] planeDimensions = { img.getWidth() + 1, img.getHeight() + 1 };
-			final N5Writer writer = ZSpacing.n5Writer( root );
+			final N5Writer writer = N5Helpers.n5Writer( root );
 			final long[] dimensions = LongStream.concat( Arrays.stream( planeDimensions ), LongStream.of( filenames.size() ) ).toArray();
 			final long[] dimensionsXY = LongStream.concat( Arrays.stream( dimensions ), LongStream.of( filenames.size() ) ).toArray();
 			final int[] blockSize = IntStream.concat( Arrays.stream( planeBlockSize ), IntStream.of( 1 ) ).toArray();
@@ -65,7 +65,7 @@ public class GenerateIntegralImages
 			final IntegralImgLong< T > iimg = new IntegralImgLong<>( img, new LongType(), ( s, t ) -> t.set( s.getIntegerLong() ) );
 			iimg.process();
 			final Img< LongType > store = iimg.getResult();
-			final N5Writer writer = ZSpacing.n5Writer( root );
+			final N5Writer writer = N5Helpers.n5Writer( root );
 
 			final long[] offset = new long[] { 0, 0, filename._1 };
 			N5Utils.saveBlock( Views.addDimension( store, 0, 0 ), writer, datasetSumX, offset );
@@ -94,7 +94,7 @@ public class GenerateIntegralImages
 			final IntegralImgLong< T > iimgSquared = new IntegralImgLong<>( multiply( img1, img2 ), new LongType(), ( s, t ) -> t.set( s.getIntegerLong() ) );
 			iimgSquared.process();
 			final Img< LongType > storeSquared = iimgSquared.getResult();
-			final N5Writer writer = ZSpacing.n5Writer( root );
+			final N5Writer writer = N5Helpers.n5Writer( root );
 
 			final long[] offset = new long[] { 0, 0, z1, z2 };
 			N5Utils.saveBlock( Views.addDimension( Views.addDimension( storeSquared, 0, 0 ), 0, 0 ), writer, datasetSumXY, offset );

@@ -17,14 +17,12 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.GzipCompression;
-import org.janelia.saalfeldlab.n5.N5FSReader;
-import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Reader;
-import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.SparkInference.InputData;
 import org.janelia.thickness.inference.Options;
 import org.janelia.thickness.utility.Grids;
+import org.janelia.thickness.utility.N5Helpers;
 import org.kohsuke.args4j.Argument;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
@@ -56,6 +54,7 @@ import scala.Tuple2;
  * @author Philipp Hanslovsky
  *
  */
+@Deprecated
 public class ZSpacing
 {
 
@@ -115,7 +114,7 @@ public class ZSpacing
 
 		final Logger log = LOG;// LogManager.getRootLogger();
 
-		final N5Reader n5 = n5( root );
+		final N5Reader n5 = N5Helpers.n5( root );
 		if ( !n5.exists( "/" ) ) { throw new RuntimeException( "N5 root does not exist!" ); }
 
 		final int numScaleLevels = n5.getAttribute( "/", "scaleLevels", int.class );
@@ -176,11 +175,11 @@ public class ZSpacing
 					matricesAndCoordinates.map( new SparkInference.Inference<>( options, startingCoordinates.length ) );
 
 			final String outputDataset = "/" + level + "/forward";
-			n5Writer( root ).createDataset( outputDataset, currentDim, blockSize, DataType.FLOAT64, new GzipCompression() );
+			N5Helpers.n5Writer( root ).createDataset( outputDataset, currentDim, blockSize, DataType.FLOAT64, new GzipCompression() );
 			newCoordinates.foreach( coordinates -> {
 				final long[] blockPosition = new long[ coordinates.numDimensions() ];
 				Arrays.setAll( blockPosition, d -> coordinates.min( d ) / blockSize[ d ] );
-				N5Utils.saveBlock( coordinates, n5Writer( root ), outputDataset, blockPosition );
+				N5Utils.saveBlock( coordinates, N5Helpers.n5Writer( root ), outputDataset, blockPosition );
 			} );
 
 
@@ -234,7 +233,7 @@ public class ZSpacing
 			final String root,
 			final String dataset ) throws IOException
 	{
-		return dataSupplier( n5( root ), dataset );
+		return dataSupplier( N5Helpers.n5( root ), dataset );
 	}
 
 	public static < T extends NativeType< T > > Supplier< RandomAccessibleInterval< T > > dataSupplier(
@@ -251,16 +250,6 @@ public class ZSpacing
 				throw new RuntimeException( e );
 			}
 		};
-	}
-
-	public static N5Reader n5( final String root ) throws IOException
-	{
-		return new N5FSReader( root );
-	}
-
-	public static N5Writer n5Writer( final String root ) throws IOException
-	{
-		return new N5FSWriter( root );
 	}
 
 	public static RandomAccessibleInterval< RealComposite< DoubleType > > asComposite( final double[] data )

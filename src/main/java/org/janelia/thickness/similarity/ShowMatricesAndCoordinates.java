@@ -9,7 +9,7 @@ import java.util.stream.Collectors;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.CollapsedRandomAccessibleInterval;
-import org.janelia.thickness.ZSpacing;
+import org.janelia.thickness.utility.N5Helpers;
 import org.janelia.utility.MatrixStripConversion;
 
 import bdv.util.AxisOrder;
@@ -17,23 +17,29 @@ import bdv.util.BdvFunctions;
 import bdv.util.BdvOptions;
 import bdv.util.BdvStackSource;
 import ij.ImageJ;
+import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.converter.Converters;
 import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.real.DoubleType;
 import net.imglib2.util.Intervals;
+import net.imglib2.util.Pair;
 import net.imglib2.util.Util;
+import net.imglib2.view.IntervalView;
 import net.imglib2.view.Views;
 
-public class ShowMatrices
+public class ShowMatricesAndCoordinates
 {
 
 	public static void main( final String[] args ) throws IOException
 	{
+
+		final int level = 2;
+
 		final String root = "/home/hanslovskyp/workspace/z-spacing-n5/test.n5";
-		final String dataset = "3/matrices";
-		final N5Reader n5 = ZSpacing.n5( root );
+		final String dataset = level + "/matrices";
+		final N5Reader n5 = N5Helpers.n5( root );
 		final RandomAccessibleInterval< DoubleType > matrices = N5Utils.openVolatile( n5, dataset );
 
 		RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > matricesCollapsed = new CollapsedRandomAccessibleInterval<>( matrices, 2 );
@@ -54,11 +60,42 @@ public class ShowMatrices
 		new ImageJ();
 		ImageJFunctions.show( matricesStacked, "ok" );
 
+		String coordinatesDataset = level + "/forward";
+		RandomAccessibleInterval< DoubleType > coordinates = N5Utils.openVolatile( n5, coordinatesDataset );
+		IntervalView< DoubleType > fwd = Views.zeroMin( Views.translate( Views.expandBorder( coordinates, 0, 0, -1 ), 0, 0, 1 ) );
+		IntervalView< DoubleType > bck = Views.zeroMin( Views.translate( Views.expandBorder( coordinates, 0, 0, -1 ), 0, 0, -1 ) );
+		RandomAccessibleInterval< DoubleType > diff = subtract( fwd, bck );
+		BdvStackSource< DoubleType > bdvDiff = BdvFunctions.show( diff, "diff" );
+		bdvDiff.setDisplayRange( 0, 1 );
+
+		ImageJFunctions.show( coordinates, "coord" );
+		ImageJFunctions.show( diff, "diff" );
+
 	}
 
 	public static < T extends RealType< T > > RandomAccessibleInterval< T > multiply( final RandomAccessibleInterval< T > input, final double mul )
 	{
 		return Converters.convert( input, ( s, t ) -> t.setReal( s.getRealDouble() * mul ), Util.getTypeFromInterval( input ).createVariable() );
+	}
+
+	public static < T extends RealType< T > > RandomAccessibleInterval< T > subtract(
+			RandomAccessibleInterval< T > minuend,
+			RandomAccessibleInterval< T > subtrahend )
+	{
+		return Views.interval( subtract( minuend, subtrahend, Util.getTypeFromInterval( minuend ).createVariable() ), minuend );
+	}
+
+	public static < T extends RealType< T > > RandomAccessible< T > subtract(
+			RandomAccessible< T > minuend,
+			RandomAccessible< T > subtrahend,
+			T type )
+	{
+		RandomAccessible< Pair< T, T > > paired = Views.pair( minuend, subtrahend );
+		return Converters.convert( paired, ( s, t ) -> {
+//			System.out.println( s.getA() +  " " + s.getB() );
+			t.set( s.getA() );
+			t.sub( s.getB() );
+		}, type );
 	}
 
 }

@@ -11,6 +11,7 @@ import org.janelia.thickness.inference.fits.GlobalCorrelationFitAverage;
 import org.janelia.thickness.inference.fits.LocalCorrelationFitAverage;
 import org.janelia.thickness.inference.visitor.LazyVisitor;
 import org.janelia.thickness.inference.visitor.Visitor;
+import org.janelia.utility.MatrixStripConversion;
 
 import mpicbg.models.NotEnoughDataPointsException;
 import net.imglib2.Cursor;
@@ -45,7 +46,7 @@ public class SparkInference
 	}
 
 	public static class Inference< T extends RealType< T > & NativeType< T >, U extends RealType< U > & NativeType< U > >
-	implements Function< InputData< T, U >, RandomAccessibleInterval< U > >
+			implements Function< InputData< T, U >, RandomAccessibleInterval< U > >
 	{
 		private static final long serialVersionUID = 8094812748656050753L;
 
@@ -82,9 +83,11 @@ public class SparkInference
 					Arrays.stream( Intervals.dimensionsAsLongArray( startingCoordinates ) ),
 					LongStream.of( sectionMax - sectionMin + 1 ) ).toArray();
 
-			final Img< U > targetCoordinates = new ArrayImgFactory< U >().create( coordinatesDims, Util.getTypeFromInterval( t.coordinates ).get( sectionMin ).copy() );
+			System.out.println( "section min=" + sectionMin + " section max=" + sectionMax );
 
-
+			final Img< U > targetCoordinates = new ArrayImgFactory< U >().create(
+					coordinatesDims,
+					Util.getTypeFromInterval( t.coordinates ).get( sectionMin ).copy() );
 
 //			for ( final Cursor< FloatType > c = Views.iterable( matrix ).cursor(); c.hasNext(); )
 //			{
@@ -100,7 +103,10 @@ public class SparkInference
 			final Cursor< RealComposite< U > > targetCoordinatesCursor = Views.flatIterable( Views.collapseReal( targetCoordinates ) ).cursor();
 			while ( matrixCursor.hasNext() )
 			{
-				final RandomAccessibleInterval< T > matrix = matrixCursor.next();
+				RandomAccessibleInterval< T > strip = matrixCursor.next();
+				T extension = Util.getTypeFromInterval( strip ).createVariable();
+				extension.setReal( Double.NaN );
+				final RandomAccessibleInterval< T > matrix = MatrixStripConversion.stripToMatrix( strip, extension );
 				final Composite< U > initCoord = initialCoordinatesCursor.next();
 				final RealComposite< U > targetCoord = targetCoordinatesCursor.next();
 				final AbstractCorrelationFit corrFit = options.estimateWindowRadius < 0 ? new GlobalCorrelationFitAverage() : new LocalCorrelationFitAverage( ( int ) matrix.dimension( 1 ), options );;
@@ -108,7 +114,7 @@ public class SparkInference
 				final Visitor visitor = new LazyVisitor();
 				try
 				{
-					final double[] initialCoordinatesArray = new double[ ( int ) ( sectionMax - sectionMin ) ];
+					final double[] initialCoordinatesArray = new double[ ( int ) ( sectionMax - sectionMin + 1 ) ];
 					for ( int i = 0; i < initialCoordinatesArray.length; ++i )
 					{
 						initialCoordinatesArray[ i ] = initCoord.get( i + sectionMin ).getRealDouble();
@@ -124,7 +130,7 @@ public class SparkInference
 							break;
 						}
 					}
-					for ( long m = sectionMin, i = 0; m < sectionMax; ++m, ++i )
+					for ( long m = sectionMin, i = 0; m <= sectionMax; ++m, ++i )
 					{
 						targetCoord.get( m ).setReal( coordinatesAreFinite ? coordinates[ ( int ) i ] : initCoord.get( m ).getRealDouble() );
 					}
@@ -135,7 +141,7 @@ public class SparkInference
 					e.printStackTrace( System.err );
 				}
 			}
-			return Views.translate( targetCoordinates, Intervals.minAsLongArray( t.coordinates ) );
+			return Views.translate( targetCoordinates, LongStream.concat( Arrays.stream( Intervals.minAsLongArray( t.coordinates ) ), LongStream.of( 0 ) ).toArray() );
 		}
 	}
 
@@ -150,7 +156,15 @@ public class SparkInference
 		}
 
 		@Override
-		public < T extends RealType< T > > void act( final int iteration, final RandomAccessibleInterval< T > matrix, final RandomAccessibleInterval< T > scaledMatrix, final double[] lut, final int[] permutation, final int[] inversePermutation, final double[] multipliers, final RandomAccessibleInterval< double[] > estimatedFit )
+		public < T extends RealType< T > > void act(
+				final int iteration,
+				final RandomAccessibleInterval< T > matrix,
+				final RandomAccessibleInterval< T > scaledMatrix,
+				final double[] lut,
+				final int[] permutation,
+				final int[] inversePermutation,
+				final double[] multipliers,
+				final RandomAccessibleInterval< double[] > estimatedFit )
 		{
 			final Cursor< DoubleType > current = Views.flatIterable( Views.hyperSlice( img, 1, iteration ) ).cursor();
 			for ( int z = 0; current.hasNext(); ++z )
