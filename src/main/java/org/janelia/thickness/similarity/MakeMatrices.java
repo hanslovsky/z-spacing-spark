@@ -8,16 +8,15 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
-import java.util.stream.LongStream;
 
 import org.apache.log4j.Level;
 import org.apache.log4j.LogManager;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.GzipCompression;
+import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.thickness.KryoSerialization;
 import org.janelia.thickness.ZSpacing;
 import org.janelia.thickness.utility.Grids;
@@ -30,6 +29,16 @@ import picocli.CommandLine.Parameters;
 
 public class MakeMatrices
 {
+
+	public static final String INTEGRAL_SUM_DATASET = "integral-sum";
+
+	public static final String INTEGRAL_SUM_SQUARED_DATASET = "integral-sum-squared";
+
+	public static final String MATRICES_DATASET = "matrices";
+
+	public static String FILENAMES_ATTRIBUTE = "filenames";
+
+	public static String ROOT = "/";
 
 	@Command(
 			name = "make-matrices",
@@ -61,6 +70,12 @@ public class MakeMatrices
 				description = "Z-range for each level in the hierarchy. range_i >= range_{i+1} for all i!" )
 		private int[] range;
 
+		@Option( names = "--generate-integral-images", required = false, description = "If specified, generate integral images even when dataset exists." )
+		private boolean generateIntegralImages;
+
+		@Option( names = "--generate-matrices", required = false, description = "If specified, generate matrices even when dataset exists." )
+		private boolean generateMatrices;
+
 		@Override
 		public Boolean call() throws Exception
 		{
@@ -90,7 +105,8 @@ public class MakeMatrices
 
 		final List< String > filenames = Files.readAllLines( Paths.get( cmdLineArgs.images ) );
 
-		ZSpacing.n5Writer( cmdLineArgs.root ).setAttribute( "/", "filenames", filenames );
+		final N5Writer n5 = ZSpacing.n5Writer( cmdLineArgs.root );
+		n5.setAttribute( ROOT, FILENAMES_ATTRIBUTE, filenames );
 
 		final SparkConf conf = new SparkConf()
 				.setAppName( MethodHandles.lookup().lookupClass().getName() )
@@ -101,18 +117,26 @@ public class MakeMatrices
 		{
 			LogManager.getRootLogger().setLevel( Level.ERROR );
 
-			GenerateIntegralImages.run(
-					sc,
-					filenames,
-					cmdLineArgs.integralImageBlockSize,
-					cmdLineArgs.range[ 0 ],
-					cmdLineArgs.root,
-					"integral-sum",
-					"integral-sum-squared" );
+			if ( cmdLineArgs.generateIntegralImages || !n5.datasetExists( INTEGRAL_SUM_DATASET ) || !n5.datasetExists( INTEGRAL_SUM_SQUARED_DATASET ) )
+			{
+				System.out.println( "Creating integral images." );
+				GenerateIntegralImages.run(
+						sc,
+						filenames,
+						cmdLineArgs.integralImageBlockSize,
+						cmdLineArgs.range[ 0 ],
+						cmdLineArgs.root,
+						INTEGRAL_SUM_DATASET,
+						INTEGRAL_SUM_SQUARED_DATASET );
+			}
+			else
+			{
+				System.out.println( "Integral images already exist -- skipping" );
+			}
 
 			final long[] stepSizes = new long[ 2 ];
 			final long[] radii = new long[ 2 ];
-			final DatasetAttributes integralSumAttrs = ZSpacing.n5( cmdLineArgs.root ).getDatasetAttributes( "integral-sum" );
+			final DatasetAttributes integralSumAttrs = ZSpacing.n5( cmdLineArgs.root ).getDatasetAttributes( INTEGRAL_SUM_DATASET );
 			final long[] imgDim = Arrays.stream( integralSumAttrs.getDimensions() ).limit( 2 ).map( l -> l - 1 ).toArray();
 
 			for ( int d = 0; d < stepSizes.length; ++d )
@@ -139,11 +163,8 @@ public class MakeMatrices
 				final long[] maxPosition = new long[] { 0, 0 };
 				positions.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
 				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
-				final long[] datasetDims = LongStream.concat( Arrays.stream( currentDim ), LongStream.of( range + 1, filenames.size() ) ).toArray();
 
-				final String matrixDataset = level + "/matrices";
-
-				ZSpacing.n5Writer( cmdLineArgs.root ).createDataset( matrixDataset, datasetDims, new int[] { 1, 1, range + 1, filenames.size() }, DataType.FLOAT64, new GzipCompression() );
+				final String matrixDataset = level + ROOT + MATRICES_DATASET;
 
 				MatricesFromN5.makeMatrices(
 						blocksRDD,
@@ -151,10 +172,11 @@ public class MakeMatrices
 						stepSizes,
 						filenames.size(),
 						range,
-						Arrays.stream( imgDim ).map( d -> d - 1 ).toArray(),
+						currentDim,
+						Arrays.stream( imgDim ).map( dim -> dim - 1 ).toArray(),
 						cmdLineArgs.root,
-						"integral-sum",
-						"integral-sum-squared",
+						INTEGRAL_SUM_DATASET,
+						INTEGRAL_SUM_SQUARED_DATASET,
 						matrixDataset,
 						new GzipCompression(),
 						sc.broadcast( new DoubleType() ) );

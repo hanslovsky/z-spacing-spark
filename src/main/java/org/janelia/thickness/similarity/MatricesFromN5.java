@@ -12,7 +12,7 @@ import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.ZSpacing;
-import org.kohsuke.args4j.Argument;
+import org.janelia.thickness.utility.DataTypeMatcher;
 
 import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
@@ -29,29 +29,27 @@ import net.imglib2.view.Views;
 public class MatricesFromN5
 {
 
-	private static class Parameters
-	{
-
-		@Argument( metaVar = "ROOT_DIRECTORY" )
-		private String rootDirectory;
-
-		private boolean parsedSuccessfully;
-	}
-
 	public static < T extends NativeType< T > & RealType< T >, U extends NativeType< U > & RealType< U > > void makeMatrices(
 			final JavaRDD< long[] > blocksRDD,
 			final long[] radius,
 			final long[] step,
 			final long size,
 			final int range,
+			final long[] dim,
 			final long[] max,
 			final String root,
 			final String datasetSum,
 			final String datasetSumSquared,
 			final String datasetMatrix,
 			final Compression compression,
-			final Broadcast< U > matrixType )
+			final Broadcast< U > matrixType ) throws IllegalArgumentException, IOException
 	{
+		final long[] datasetDims = LongStream.concat( Arrays.stream( dim ), LongStream.of( 2 * range + 1, size ) ).toArray();
+		ZSpacing.n5Writer( root ).createDataset(
+				datasetMatrix,
+				datasetDims,
+				new int[] { 1, 1, 2 * range + 1, ( int ) size },
+				DataTypeMatcher.toDataType( matrixType.getValue() ), compression );
 		blocksRDD.foreach( new MatricesFromIntegralImagesAndWrite<>( root, datasetSum, datasetSumSquared, datasetMatrix, range, size, radius, step, max, matrixType ) );
 	}
 
@@ -82,15 +80,14 @@ public class MatricesFromN5
 		final double var_xx = S_xx - S_x * S_x / n;
 		final double var_yy = S_yy - S_y * S_y / n;
 
-
 		return var_xy * var_xy / ( var_xx * var_yy );
 
 	}
 
 	private static < T extends RealType< T > > double fromIntegralImage(
 			final RandomAccessibleInterval< T > integral,
-			final Interval interval
-			) {
+			final Interval interval )
+	{
 		double correlation = 0.0;
 		final RandomAccess< T > access = integral.randomAccess();
 //		System.out.println( "ACCESSING: " +
@@ -159,7 +156,7 @@ public class MatricesFromN5
 		public void call( final long[] block ) throws Exception
 		{
 			final N5Writer writer = ZSpacing.n5Writer( root );
-			final Img< U > matrix = new ArrayImgFactory< U >().create( new long[] { 1, 1, range + 1, size }, matrixType.getValue() );
+			final Img< U > matrix = new ArrayImgFactory< U >().create( new long[] { 1, 1, 2 * range + 1, size }, matrixType.getValue() );
 			final long[] min = new long[ block.length ];
 			final long[] max = new long[ block.length ];
 			Arrays.setAll( min, d -> block[ d ] * step[ d ] );
@@ -182,20 +179,19 @@ public class MatricesFromN5
 				final long size,
 				final int range,
 				final RandomAccessibleInterval< U > matrix,
-				final Interval interval
-				) throws IOException
+				final Interval interval ) throws IOException
 		{
 
 			final RandomAccessibleInterval< T > sum = N5Utils.< T >open( reader, datasetSum );
 			final RandomAccessibleInterval< T > sumSquared = N5Utils.< T >open( reader, datasetSumSquared );
 
 			initialize( matrix, Double.NaN );
-			Views.hyperSlice( matrix, 0, 0L ).forEach( U::setOne );
-			final net.imglib2.RandomAccess< U > matrixAccess = matrix.randomAccess();
+			Views.hyperSlice( matrix, 0, ( long ) range ).forEach( U::setOne );
+			final RandomAccess< U > matrixAccess1 = matrix.randomAccess();
+			final RandomAccess< U > matrixAccess2 = matrix.randomAccess();
 
 			for ( long z1 = 0; z1 < size; ++z1 )
 			{
-				matrixAccess.setPosition( z1, 1 );
 				final IntervalView< T > sumX = Views.hyperSlice( sum, 2, z1 );
 				final IntervalView< T > sumXX = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z1 ), 2, z1 );
 				for ( long z2 = z1 + 1, r = 1; z2 < size && r <= range; ++z2, ++r )
@@ -203,13 +199,17 @@ public class MatricesFromN5
 					final IntervalView< T > sumY = Views.hyperSlice( sum, 2, z2 );
 					final IntervalView< T > sumYY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z2 ), 2, z2 );
 					final IntervalView< T > sumXY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z2 ), 2, z1 );
-					matrixAccess.setPosition( r, 0 );
 					final double correlation = correlation2DSquared( sumX, sumY, sumXX, sumYY, sumXY, interval );
 					// TODO calculate correlation from sumX, sumY, sumXX,
 					// sumYY, sumXY for interval defined by correlationMin,
 					// correlationMax
 //					System.out.println( "CORRELATION IS " + correlation );
-					matrixAccess.get().setReal( correlation );
+					matrixAccess1.setPosition( z1, 1 );
+					matrixAccess1.setPosition( range + r, 0 );
+					matrixAccess2.setPosition( z1 + r, 1 );
+					matrixAccess2.setPosition( range - r, 0 );
+					matrixAccess1.get().setReal( correlation );
+					matrixAccess2.get().setReal( correlation );
 				}
 			}
 
