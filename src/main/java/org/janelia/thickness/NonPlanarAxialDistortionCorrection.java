@@ -1,9 +1,7 @@
-package org.janelia.thickness.similarity;
+package org.janelia.thickness;
 
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -25,11 +23,11 @@ import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
-import org.janelia.thickness.CollapsedRandomAccessibleInterval;
-import org.janelia.thickness.KryoSerialization;
-import org.janelia.thickness.SparkInference;
 import org.janelia.thickness.SparkInference.InputData;
+import org.janelia.thickness.inference.InferFromMatrix.RegularizationType;
 import org.janelia.thickness.inference.Options;
+import org.janelia.thickness.similarity.GenerateIntegralImages;
+import org.janelia.thickness.similarity.MatricesFromN5;
 import org.janelia.thickness.utility.Grids;
 import org.janelia.thickness.utility.N5Helpers;
 
@@ -75,35 +73,21 @@ public class NonPlanarAxialDistortionCorrection
 
 	public static String BACKWARD_DATASET = "backward";
 
+	public static String INTEGRAL_IMAGE_BLOCK_SIZE_ATTRIBUTE = "integralImageBlockSize";
+
+	public static String RANGE_ATTRIBUTE = "range";
+
+	public static String INFERENCE_ITERATIONS_ATTRIBUTE = "inferenceIterations";
+
+	public static String REGULARIZATION_ATTRIBUTE = "regularization";
+
 	@Command(
 			name = "distortion-correction",
 			sortOptions = true )
 	public static class CommandLineArguments implements Callable< Boolean >
 	{
-		@Parameters( index = "0", description = "Path to file containing list paths to image files" )
-		private String images;
-
-		@Parameters( index = "1", description = "N5 root for integral images and matrices." )
+		@Parameters( index = "0", description = "N5 root for integral images and matrices." )
 		private String root;
-
-		final int[] defaultIntegralImageBlockSize = { 1000, 1000 };
-
-		@Option(
-				names = { "--integral-image-blocksize" },
-				split = ",",
-				required = false,
-				description = "Block size for 2D integral images. Default = [1000, 1000]" )
-		int[] integralImageBlockSize;
-
-		@Option( names = { "-h", "--help" }, usageHelp = true, description = "Show this help message and exit." )
-		private boolean helpRequested;
-
-		@Option(
-				names = { "-r", "--range" },
-				required = true,
-				split = ",",
-				description = "Z-range for each level in the hierarchy. range_i >= range_{i+1} for all i!" )
-		private int[] range;
 
 		@Option( names = "--generate-integral-images", required = false, description = "If specified, generate integral images even when dataset exists." )
 		private boolean generateIntegralImages;
@@ -114,15 +98,6 @@ public class NonPlanarAxialDistortionCorrection
 		@Override
 		public Boolean call() throws Exception
 		{
-
-			integralImageBlockSize = Optional.ofNullable( integralImageBlockSize ).orElse( defaultIntegralImageBlockSize );
-
-			int minRange = range[ 0 ];
-			for ( final int r : range )
-			{
-				if ( r > minRange ) { throw new IllegalArgumentException( "Expected ranges to follow r_0 >= r_1 >= r2 >= ... but got " + Arrays.toString( range ) ); }
-				minRange = r;
-			}
 
 			return true;
 		}
@@ -138,10 +113,16 @@ public class NonPlanarAxialDistortionCorrection
 
 		if ( !parsedSuccessfully ) { return; }
 
-		final List< String > filenames = Files.readAllLines( Paths.get( cmdLineArgs.images ) );
-
 		final N5Writer n5 = N5Helpers.n5Writer( cmdLineArgs.root );
-		n5.setAttribute( SEPARATOR, FILENAMES_ATTRIBUTE, filenames );
+		String rootGroup = SEPARATOR;
+		List< String > filenames = Arrays.asList( n5.getAttribute( rootGroup, FILENAMES_ATTRIBUTE, String[].class ) );
+		final int[] integralImageBlockSize = n5.getAttribute( rootGroup, INTEGRAL_IMAGE_BLOCK_SIZE_ATTRIBUTE, int[].class );
+		final int[] ranges = n5.getAttribute( rootGroup, RANGE_ATTRIBUTE, int[].class );
+		final int[] iterations = n5.getAttribute( rootGroup, INFERENCE_ITERATIONS_ATTRIBUTE, int[].class );
+		final double[] regularization = n5.getAttribute( rootGroup, REGULARIZATION_ATTRIBUTE, double[].class );
+		
+		int lastIteration = iterations[ 0 ];
+		double lastRegularization = regularization[ 0 ];
 
 		final SparkConf conf = new SparkConf()
 				.setAppName( MethodHandles.lookup().lookupClass().getName() )
@@ -160,8 +141,8 @@ public class NonPlanarAxialDistortionCorrection
 				GenerateIntegralImages.run(
 						sc,
 						filenames,
-						cmdLineArgs.integralImageBlockSize,
-						cmdLineArgs.range[ 0 ],
+						integralImageBlockSize,
+						ranges[ 0 ],
 						cmdLineArgs.root,
 						INTEGRAL_SUM_DATASET,
 						INTEGRAL_SUM_SQUARED_DATASET );
@@ -187,7 +168,7 @@ public class NonPlanarAxialDistortionCorrection
 
 			final String root = cmdLineArgs.root;
 
-			for ( int level = 0; level < cmdLineArgs.range.length; ++level )
+			for ( int level = 0; level < ranges.length; ++level )
 			{
 
 				if ( Arrays.stream( radii ).filter( r -> r > 1 ).count() == 0 )
@@ -195,7 +176,7 @@ public class NonPlanarAxialDistortionCorrection
 					break;
 				}
 
-				final int range = cmdLineArgs.range[ level ];
+				final int range = ranges[ level ];
 
 				final List< long[] > positions = Grids
 						.collectAllOffsets( imgDim, Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray(), a -> divide( a, steps, a ) );
@@ -254,7 +235,7 @@ public class NonPlanarAxialDistortionCorrection
 							return new FinalInterval( min, max );
 						} );
 
-				final JavaRDD< InputData< DoubleType, DoubleType > > matricesAndCoordinates = getMatricesAndCoordinates(
+				final JavaRDD< SparkInference.InputData< DoubleType, DoubleType > > matricesAndCoordinates = getMatricesAndCoordinates(
 						sc,
 						inferenceBlocksRdd,
 						matrixSupplier,
@@ -273,10 +254,17 @@ public class NonPlanarAxialDistortionCorrection
 				}
 
 				Options options = Options.generateDefaultOptions();
-				options.comparisonRange = cmdLineArgs.range[ level ];
+				options.comparisonRange = range;
+				options.coordinateUpdateRegularizerWeight = level < regularization.length ? regularization[ level ] : lastRegularization / 2.0;
+				options.nIterations = level < iterations.length ? iterations[ level ] : Math.max( lastIteration / 2, 1 );
+				options.regularizationType = level == 0 ? RegularizationType.BORDER : RegularizationType.NONE;
+				lastRegularization = options.coordinateUpdateRegularizerWeight;
+				lastIteration = options.nIterations;
 
 				final JavaRDD< RandomAccessibleInterval< DoubleType > > newCoordinates =
-						matricesAndCoordinates.map( new SparkInference.Inference<>( options, startingCoordinates.length ) );
+						matricesAndCoordinates.map( new SparkInference.Inference<>(
+								options,
+								startingCoordinates.length ) );
 
 				long[] coordinatesDims = append( currentDim, filenames.size() );
 				int[] coordinatesBlockSize = append( blockSize, filenames.size() );
@@ -406,14 +394,16 @@ public class NonPlanarAxialDistortionCorrection
 		}
 
 	}
-	
-	public static long[] append( long[] array, long... appendix ) {
+
+	public static long[] append( long[] array, long... appendix )
+	{
 		return LongStream
 				.concat( Arrays.stream( array ), LongStream.of( appendix ) )
 				.toArray();
 	}
-	
-	public static int[] append( int[] array, int... appendix ) {
+
+	public static int[] append( int[] array, int... appendix )
+	{
 		return IntStream
 				.concat( Arrays.stream( array ), IntStream.of( appendix ) )
 				.toArray();

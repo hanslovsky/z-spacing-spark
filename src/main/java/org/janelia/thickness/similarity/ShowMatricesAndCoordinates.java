@@ -34,7 +34,7 @@ public class ShowMatricesAndCoordinates
 
 		final int level = 2;
 
-		final String root = "/home/hanslovskyp/workspace/z-spacing-n5/test.n5";
+		final String root = "/home/hanslovskyp/workspace/z-spacing-n5/project.n5";
 		final String dataset = level + "/matrices";
 		final N5Reader n5 = N5Helpers.n5( root );
 		final RandomAccessibleInterval< DoubleType > matrices = N5Utils.openVolatile( n5, dataset );
