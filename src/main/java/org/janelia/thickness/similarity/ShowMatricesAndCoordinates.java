@@ -2,7 +2,6 @@ package org.janelia.thickness.similarity;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -23,10 +22,8 @@ import net.imglib2.converter.Converters;
 import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.real.DoubleType;
-import net.imglib2.util.Intervals;
 import net.imglib2.util.Pair;
 import net.imglib2.util.Util;
-import net.imglib2.view.IntervalView;
 import net.imglib2.view.Views;
 
 public class ShowMatricesAndCoordinates
@@ -55,18 +52,17 @@ public class ShowMatricesAndCoordinates
 				"matrix",
 				BdvOptions.options().is2D().axisOrder( AxisOrder.XYT ) );
 		bdv.setDisplayRange( 0, 1 );
-		System.out.println( "DIMS: " + Arrays.toString( Intervals.dimensionsAsLongArray( matrices ) ) + " " + Arrays.toString( Intervals.dimensionsAsLongArray( matricesStacked ) ) );
 
 		new ImageJ();
 		ImageJFunctions.show( matricesStacked, "ok" );
 
 		String coordinatesDataset = level + "/forward";
 		RandomAccessibleInterval< DoubleType > coordinates = N5Utils.openVolatile( n5, coordinatesDataset );
-		IntervalView< DoubleType > fwd = Views.zeroMin( Views.translate( Views.expandBorder( coordinates, 0, 0, -1 ), 0, 0, 1 ) );
-		IntervalView< DoubleType > bck = Views.zeroMin( Views.translate( Views.expandBorder( coordinates, 0, 0, -1 ), 0, 0, -1 ) );
-		RandomAccessibleInterval< DoubleType > diff = subtract( fwd, bck );
+		RandomAccessible< DoubleType > fwd = Views.translate( Views.extendBorder( coordinates ), 0, 0, -1 );
+		RandomAccessible< DoubleType > bck = Views.translate( Views.extendBorder( coordinates ), 0, 0, 1 );
+		RandomAccessibleInterval< DoubleType > diff = Views.interval( subtract( fwd, bck, new DoubleType() ), coordinates );
 		BdvStackSource< DoubleType > bdvDiff = BdvFunctions.show( diff, "diff" );
-		bdvDiff.setDisplayRange( 0, 1 );
+		bdvDiff.setDisplayRange( -2, 2 );
 
 		ImageJFunctions.show( coordinates, "coord" );
 		ImageJFunctions.show( diff, "diff" );
