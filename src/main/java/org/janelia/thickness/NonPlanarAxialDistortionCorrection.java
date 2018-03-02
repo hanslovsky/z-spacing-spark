@@ -89,16 +89,22 @@ public class NonPlanarAxialDistortionCorrection
 		@Parameters( index = "0", description = "N5 root for integral images and matrices." )
 		private String root;
 
-		@Option( names = "--generate-integral-images", required = false, description = "If specified, generate integral images even when dataset exists." )
+		@Option( 
+				names = "--generate-integral-images", 
+				required = false,
+				description ="If specified, generate integral images even when dataset exists. This will switch on --generate-matrices as well." )
 		private boolean generateIntegralImages;
 
-		@Option( names = "--generate-matrices", required = false, description = "If specified, generate matrices even when dataset exists." )
+		@Option( 
+				names = "--generate-matrices", 
+				required = false, 
+				description = "If specified, generate matrices even when dataset exists." )
 		private boolean generateMatrices;
 
 		@Override
 		public Boolean call() throws Exception
 		{
-
+			this.generateIntegralImages |= this.generateIntegralImages;
 			return true;
 		}
 	}

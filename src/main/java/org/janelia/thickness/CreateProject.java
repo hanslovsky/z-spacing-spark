@@ -49,13 +49,13 @@ public class CreateProject
 				description = "Regularization to previous result." )
 		private double[] regularization;
 
-		private final int[] defaultIntegralImageBlockSize = { 1000, 1000 };
+		private final int[] defaultIntegralImageBlockSize = { 10, 10, 1000 };
 
 		@Option(
 				names = { "--integral-image-blocksize" },
 				split = ",",
 				required = false,
-				description = "Block size for 2D integral images. Default = [1000, 1000]" )
+				description = "Block size for 2D integral images. Default = [10, 10, 1000]" )
 		int[] integralImageBlockSize;
 
 		@Option( names = { "-h", "--help" }, usageHelp = true, description = "Show this help message and exit." )

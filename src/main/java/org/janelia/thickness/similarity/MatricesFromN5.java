@@ -193,12 +193,12 @@ public class MatricesFromN5
 			for ( long z1 = 0; z1 < size; ++z1 )
 			{
 				final IntervalView< T > sumX = Views.hyperSlice( sum, 2, z1 );
-				final IntervalView< T > sumXX = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z1 ), 2, z1 );
+				final IntervalView< T > sumXX = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, 0 ), 2, z1 );
 				for ( long z2 = z1 + 1, r = 1; z2 < size && r <= range; ++z2, ++r )
 				{
 					final IntervalView< T > sumY = Views.hyperSlice( sum, 2, z2 );
-					final IntervalView< T > sumYY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z2 ), 2, z2 );
-					final IntervalView< T > sumXY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, z2 ), 2, z1 );
+					final IntervalView< T > sumYY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, 0 ), 2, z2 );
+					final IntervalView< T > sumXY = Views.hyperSlice( Views.hyperSlice( sumSquared, 3, r ), 2, z1 );
 					final double correlation = correlation2DSquared( sumX, sumY, sumXX, sumYY, sumXY, interval );
 					// TODO calculate correlation from sumX, sumY, sumXX,
 					// sumYY, sumXY for interval defined by correlationMin,

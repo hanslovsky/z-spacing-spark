@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
@@ -13,6 +14,7 @@ import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.spark.N5ConvertSpark;
 import org.janelia.thickness.utility.N5Helpers;
 
 import ij.ImagePlus;
@@ -36,24 +38,26 @@ public class GenerateIntegralImages
 	public static < T extends IntegerType< T> & NativeType< T > > void run(
 			final JavaSparkContext sc,
 			final List< String > filenames,
-			final int[] planeBlockSize,
+			final int[] blockSize,
 			final int range,
 			final String root,
 			final String datasetSumX,
 			final String datasetSumXY ) throws IOException
 	{
 
+		final String datasetSumXTmp = datasetSumX + "-tmp";
+		final String datasetSumXYTmp = datasetSumXY + "-tmp";
 
 		{
 			final ImagePlus img = new ImagePlus( filenames.get( 0 ) );
-			final long[] planeDimensions = { img.getWidth() + 1, img.getHeight() + 1 };
+			final int[] integralPlaneDimensions = { img.getWidth() + 1, img.getHeight() + 1 };
 			final N5Writer writer = N5Helpers.n5Writer( root );
-			final long[] dimensions = LongStream.concat( Arrays.stream( planeDimensions ), LongStream.of( filenames.size() ) ).toArray();
-			final long[] dimensionsXY = LongStream.concat( Arrays.stream( dimensions ), LongStream.of( filenames.size() ) ).toArray();
-			final int[] blockSize = IntStream.concat( Arrays.stream( planeBlockSize ), IntStream.of( 1 ) ).toArray();
-			final int[] blockSizeXY = IntStream.concat( Arrays.stream( blockSize ), IntStream.of( 1 ) ).toArray();
-			writer.createDataset( datasetSumX, dimensions, blockSize, DataType.INT64, new GzipCompression() );
-			writer.createDataset( datasetSumXY, dimensionsXY, blockSizeXY, DataType.INT64, new GzipCompression() );
+			final long[] dimensionsX = LongStream.concat( Arrays.stream( integralPlaneDimensions ).asLongStream(), LongStream.of( filenames.size() ) ).toArray();
+			final long[] dimensionsXY = LongStream.concat( Arrays.stream( dimensionsX ), LongStream.of( range + 1 ) ).toArray();
+			final int[] blockSizeX = IntStream.concat( Arrays.stream( integralPlaneDimensions ), IntStream.of( 1 ) ).toArray();
+			final int[] blockSizeXY = IntStream.concat( Arrays.stream( blockSizeX ), IntStream.of( 1 ) ).toArray();
+			writer.createDataset( datasetSumXTmp, dimensionsX, blockSizeX, DataType.INT64, new GzipCompression() );
+			writer.createDataset( datasetSumXYTmp, dimensionsXY, blockSizeXY, DataType.INT64, new GzipCompression() );
 		}
 
 		sc
@@ -68,7 +72,7 @@ public class GenerateIntegralImages
 			final N5Writer writer = N5Helpers.n5Writer( root );
 
 			final long[] offset = new long[] { 0, 0, filename._1 };
-			N5Utils.saveBlock( Views.addDimension( store, 0, 0 ), writer, datasetSumX, offset );
+			N5Utils.saveBlock( Views.addDimension( store, 0, 0 ), writer, datasetSumXTmp, offset );
 		} );
 
 		final List< Tuple2< Tuple2< Integer, String >, Tuple2< Integer, String > > > pairs = new ArrayList<>();
@@ -96,9 +100,33 @@ public class GenerateIntegralImages
 			final Img< LongType > storeSquared = iimgSquared.getResult();
 			final N5Writer writer = N5Helpers.n5Writer( root );
 
-			final long[] offset = new long[] { 0, 0, z1, z2 };
-			N5Utils.saveBlock( Views.addDimension( Views.addDimension( storeSquared, 0, 0 ), 0, 0 ), writer, datasetSumXY, offset );
+			final long[] offset = new long[] { 0, 0, z1, z2 - z1 };
+			N5Utils.saveBlock( Views.addDimension( Views.addDimension( storeSquared, 0, 0 ), 0, 0 ), writer, datasetSumXYTmp, offset );
 		} );
+		
+		N5ConvertSpark.convert( 
+				sc, 
+				() -> N5Helpers.n5( root ), 
+				datasetSumXTmp, 
+				() -> N5Helpers.n5Writer( root ), 
+				datasetSumX, 
+				Optional.of( blockSize ), 
+				Optional.empty(), 
+				Optional.empty(), 
+				Optional.empty(),
+				true );
+		
+		N5ConvertSpark.convert( 
+				sc, 
+				() -> N5Helpers.n5( root ), 
+				datasetSumXYTmp,
+				() -> N5Helpers.n5Writer( root ), 
+				datasetSumXY, 
+				Optional.of( IntStream.concat( Arrays.stream( blockSize ), IntStream.of( range + 1 ) ).toArray() ), 
+				Optional.empty(), 
+				Optional.empty(), 
+				Optional.empty(),
+				true );
 
 
 	}
@@ -114,24 +142,5 @@ public class GenerateIntegralImages
 			t.mul( s.getB() );
 		}, type );
 	}
-
-//	public static void main( final String[] args ) throws IOException
-//	{
-//		final SparkConf conf = new SparkConf().setAppName( MethodHandles.lookup().lookupClass().getName() ).setMaster( "local" );
-//		try (final JavaSparkContext sc = new JavaSparkContext( conf ))
-//		{
-//			final List< String > filenames = Arrays.asList(
-//					"/data/hanslovskyp/davi_toy_set/data/seq/0000.tif",
-//					"/data/hanslovskyp/davi_toy_set/data/seq/0001.tif" );
-//			final long[] planeDimensions = new long[] { 1191, 1623 };
-//			final int[] planeBlockSize = Arrays.stream( planeDimensions ).mapToInt( l -> ( int ) l ).toArray();
-////			final int[] planeBlockSize = new int[] { 100, 100 };
-//			final int range = 1;
-//			final String root = "/data/hanslovskyp/n5";
-//			final String datasetSumX = "test-sum-x";
-//			final String datasetSumXY = "test-sum-xy";
-//			run( sc, filenames, planeBlockSize, range, root, datasetSumX, datasetSumXY );
-//		}
-//	}
 
 }
