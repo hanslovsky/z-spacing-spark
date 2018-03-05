@@ -26,8 +26,8 @@ import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.SparkInference.InputData;
 import org.janelia.thickness.inference.InferFromMatrix.RegularizationType;
 import org.janelia.thickness.inference.Options;
-import org.janelia.thickness.similarity.GenerateIntegralImages;
-import org.janelia.thickness.similarity.MatricesFromN5;
+import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY;
+import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverZ;
 import org.janelia.thickness.utility.Grids;
 import org.janelia.thickness.utility.N5Helpers;
 
@@ -59,13 +59,7 @@ import picocli.CommandLine.Parameters;
 public class NonPlanarAxialDistortionCorrection
 {
 
-	public static final String INTEGRAL_SUM_DATASET = "integral-sum";
-
-	public static final String INTEGRAL_SUM_SQUARED_DATASET = "integral-sum-squared";
-
 	public static final String MATRICES_DATASET = "matrices";
-
-	public static String FILENAMES_ATTRIBUTE = "filenames";
 
 	public static String SEPARATOR = "/";
 
@@ -73,13 +67,15 @@ public class NonPlanarAxialDistortionCorrection
 
 	public static String BACKWARD_DATASET = "backward";
 
-	public static String INTEGRAL_IMAGE_BLOCK_SIZE_ATTRIBUTE = "integralImageBlockSize";
-
 	public static String RANGE_ATTRIBUTE = "range";
 
 	public static String INFERENCE_ITERATIONS_ATTRIBUTE = "inferenceIterations";
 
 	public static String REGULARIZATION_ATTRIBUTE = "regularization";
+
+	public static String SOURCE_ROOT_ATTRIBUTE = "sourceRoot";
+
+	public static String SOURCE_DATASET_ATTRIBUTE = "sourceDataset";
 
 	@Command(
 			name = "distortion-correction",
@@ -89,27 +85,26 @@ public class NonPlanarAxialDistortionCorrection
 		@Parameters( index = "0", description = "N5 root for integral images and matrices." )
 		private String root;
 
-		@Option( 
-				names = "--generate-integral-images", 
+		@Option(
+				names = "--generate-matrices",
 				required = false,
-				description ="If specified, generate integral images even when dataset exists. This will switch on --generate-matrices as well." )
-		private boolean generateIntegralImages;
-
-		@Option( 
-				names = "--generate-matrices", 
-				required = false, 
 				description = "If specified, generate matrices even when dataset exists." )
 		private boolean generateMatrices;
+
+		@Option(
+				names = { "--matrices-only", "-m" },
+				required = false,
+				description = "Generamte matrices only, do not run inference." )
+		private boolean matricesOnly;
 
 		@Override
 		public Boolean call() throws Exception
 		{
-			this.generateIntegralImages |= this.generateIntegralImages;
 			return true;
 		}
 	}
 
-	public static void main( final String[] args ) throws IOException
+	public static void main( final String[] args ) throws Exception
 	{
 
 		final CommandLineArguments cmdLineArgs = new CommandLineArguments();
@@ -121,12 +116,20 @@ public class NonPlanarAxialDistortionCorrection
 
 		final N5Writer n5 = N5Helpers.n5Writer( cmdLineArgs.root );
 		String rootGroup = SEPARATOR;
-		List< String > filenames = Arrays.asList( n5.getAttribute( rootGroup, FILENAMES_ATTRIBUTE, String[].class ) );
-		final int[] integralImageBlockSize = n5.getAttribute( rootGroup, INTEGRAL_IMAGE_BLOCK_SIZE_ATTRIBUTE, int[].class );
 		final int[] ranges = n5.getAttribute( rootGroup, RANGE_ATTRIBUTE, int[].class );
 		final int[] iterations = n5.getAttribute( rootGroup, INFERENCE_ITERATIONS_ATTRIBUTE, int[].class );
 		final double[] regularization = n5.getAttribute( rootGroup, REGULARIZATION_ATTRIBUTE, double[].class );
-		
+
+		final String root = cmdLineArgs.root;
+		N5Reader rootN5 = N5Helpers.n5( root );
+		String sourceRoot = rootN5.getAttribute( SEPARATOR, SOURCE_ROOT_ATTRIBUTE, String.class );
+		String sourceDataset = rootN5.getAttribute( SEPARATOR, SOURCE_DATASET_ATTRIBUTE, String.class );
+		N5Reader sourceN5 = N5Helpers.n5( sourceRoot );
+		DatasetAttributes sourceAttrs = sourceN5.getDatasetAttributes( sourceDataset );
+		long[] sourceDim = sourceAttrs.getDimensions();
+
+		double[] startingCoordinates = LongStream.range( 0, sourceDim[ 2 ] ).asDoubleStream().toArray();
+
 		int lastIteration = iterations[ 0 ];
 		double lastRegularization = regularization[ 0 ];
 
@@ -135,33 +138,13 @@ public class NonPlanarAxialDistortionCorrection
 				.set( "spark.serializer", "org.apache.spark.serializer.KryoSerializer" )
 				.set( "spark.kryo.registrator", KryoSerialization.Registrator.class.getName() );
 
-		double[] startingCoordinates = LongStream.range( 0, filenames.size() ).asDoubleStream().toArray();
-
 		try (final JavaSparkContext sc = new JavaSparkContext( conf ))
 		{
 			LogManager.getRootLogger().setLevel( Level.ERROR );
 
-			if ( cmdLineArgs.generateIntegralImages || !n5.datasetExists( INTEGRAL_SUM_DATASET ) || !n5.datasetExists( INTEGRAL_SUM_SQUARED_DATASET ) )
-			{
-				System.out.println( "Creating integral images." );
-				GenerateIntegralImages.run(
-						sc,
-						filenames,
-						integralImageBlockSize,
-						ranges[ 0 ],
-						cmdLineArgs.root,
-						INTEGRAL_SUM_DATASET,
-						INTEGRAL_SUM_SQUARED_DATASET );
-			}
-			else
-			{
-				System.out.println( "Integral images already exist -- skipping" );
-			}
-
 			final long[] steps = new long[ 2 ];
 			final long[] radii = new long[ 2 ];
-			final DatasetAttributes integralSumAttrs = N5Helpers.n5( cmdLineArgs.root ).getDatasetAttributes( INTEGRAL_SUM_DATASET );
-			final long[] imgDim = Arrays.stream( integralSumAttrs.getDimensions() ).limit( 2 ).map( l -> l - 1 ).toArray();
+			long[] imgDim = LongStream.of( sourceDim ).limit( 2 ).toArray();
 
 			for ( int d = 0; d < steps.length; ++d )
 			{
@@ -171,8 +154,6 @@ public class NonPlanarAxialDistortionCorrection
 
 			long[] previousSteps = imgDim.clone();
 			long[] previousRadii = { 0, 0 };
-
-			final String root = cmdLineArgs.root;
 
 			for ( int level = 0; level < ranges.length; ++level )
 			{
@@ -186,12 +167,11 @@ public class NonPlanarAxialDistortionCorrection
 
 				final List< long[] > positions = Grids
 						.collectAllOffsets( imgDim, Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray(), a -> divide( a, steps, a ) );
-				final JavaRDD< long[] > blocksRDD = sc
-						.parallelize( positions );
 
 				final long[] maxPosition = new long[] { 0, 0 };
 				positions.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
 				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
+				final long[] matrixDim = { currentDim[ 0 ], currentDim[ 1 ], 2 * range + 1, sourceDim[ 2 ] };
 
 				final String matrixDataset = level + SEPARATOR + MATRICES_DATASET;
 				final String coordinateDataset = level + SEPARATOR + FORWARD_DATASET;
@@ -199,87 +179,79 @@ public class NonPlanarAxialDistortionCorrection
 
 				if ( cmdLineArgs.generateMatrices || !n5.datasetExists( matrixDataset ) )
 				{
-					MatricesFromN5.makeMatrices(
-							blocksRDD,
-							radii,
-							steps,
-							filenames.size(),
-							range,
-							currentDim,
-							Arrays.stream( imgDim ).map( dim -> dim - 1 ).toArray(),
-							cmdLineArgs.root,
-							INTEGRAL_SUM_DATASET,
-							INTEGRAL_SUM_SQUARED_DATASET,
-							matrixDataset,
-							new GzipCompression(),
-							sc.broadcast( new DoubleType() ) );
+					makeMatrices( sc, positions, sourceDim, matrixDim, radii, steps, range, sourceRoot, sourceDataset, root, matrixDataset );
 				}
 
-				final ScaleAndTranslation previousToWorld = new ScaleAndTranslation(
-						Arrays.stream( previousSteps ).asDoubleStream().toArray(),
-						Arrays.stream( previousRadii ).asDoubleStream().toArray() );
-				final ScaleAndTranslation currentToWorld = new ScaleAndTranslation(
-						Arrays.stream( steps ).asDoubleStream().toArray(),
-						Arrays.stream( radii ).asDoubleStream().toArray() );
+				if ( !cmdLineArgs.matricesOnly )
+				{
 
-				final ScaleAndTranslation previousToCurrent = currentToWorld.inverse().concatenate( previousToWorld );
+					final ScaleAndTranslation previousToWorld = new ScaleAndTranslation(
+							Arrays.stream( previousSteps ).asDoubleStream().toArray(),
+							Arrays.stream( previousRadii ).asDoubleStream().toArray() );
+					final ScaleAndTranslation currentToWorld = new ScaleAndTranslation(
+							Arrays.stream( steps ).asDoubleStream().toArray(),
+							Arrays.stream( radii ).asDoubleStream().toArray() );
 
-				final Supplier< RandomAccessibleInterval< RealComposite< DoubleType > > > coordinateSupplier =
-						level == 0 ? () -> asComposite( startingCoordinates ) : collapsedDataSupplier( cmdLineArgs.root, previousCoordinateDataset );
-				final Supplier< RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > > matrixSupplier = matrixDataSupplier( cmdLineArgs.root, matrixDataset );
+					final ScaleAndTranslation previousToCurrent = currentToWorld.inverse().concatenate( previousToWorld );
 
-				final long numElements = Intervals.numElements( currentDim );
-				final int stepSize = ( int ) Math.ceil( Math.sqrt( Math.max( numElements * 1.0 / sc.defaultParallelism(), 1 ) ) );
-				final int[] blockSize = IntStream.generate( () -> stepSize ).limit( currentDim.length ).toArray();
-				List< long[] > inferenceBlocks = Grids.collectAllOffsets( currentDim, blockSize );
+					final Supplier< RandomAccessibleInterval< RealComposite< DoubleType > > > coordinateSupplier =
+							level == 0 ? () -> asComposite( startingCoordinates ) : collapsedDataSupplier( cmdLineArgs.root, previousCoordinateDataset );
+					final Supplier< RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > > matrixSupplier = matrixDataSupplier( cmdLineArgs.root, matrixDataset );
 
-				JavaRDD< Interval > inferenceBlocksRdd = sc
-						.parallelize( inferenceBlocks )
-						.map( min -> {
-							long[] max = new long[ min.length ];
-							Arrays.setAll( max, d -> Math.min( min[ d ] + blockSize[ d ], currentDim[ d ] ) - 1 );
-							return new FinalInterval( min, max );
-						} );
+					final long numElements = Intervals.numElements( currentDim );
+					final int stepSize = ( int ) Math.ceil( Math.sqrt( Math.max( numElements * 1.0 / sc.defaultParallelism(), 1 ) ) );
+					final int[] blockSize = IntStream.generate( () -> stepSize ).limit( currentDim.length ).toArray();
+					List< long[] > inferenceBlocks = Grids.collectAllOffsets( currentDim, blockSize );
 
-				final JavaRDD< SparkInference.InputData< DoubleType, DoubleType > > matricesAndCoordinates = getMatricesAndCoordinates(
-						sc,
-						inferenceBlocksRdd,
-						matrixSupplier,
-						coordinateSupplier,
-						previousToCurrent,
-						new NLinearInterpolatorFactory<>() );
+					JavaRDD< Interval > inferenceBlocksRdd = sc
+							.parallelize( inferenceBlocks )
+							.map( min -> {
+								long[] max = new long[ min.length ];
+								Arrays.setAll( max, d -> Math.min( min[ d ] + blockSize[ d ], currentDim[ d ] ) - 1 );
+								return new FinalInterval( min, max );
+							} );
 
-				// update steps and radii
-				Arrays.setAll( previousSteps, d -> steps[ d ] );
-				Arrays.setAll( previousRadii, d -> radii[ d ] );
+					final JavaRDD< SparkInference.InputData< DoubleType, DoubleType > > matricesAndCoordinates = getMatricesAndCoordinates(
+							sc,
+							inferenceBlocksRdd,
+							matrixSupplier,
+							coordinateSupplier,
+							previousToCurrent,
+							new NLinearInterpolatorFactory<>() );
+
+					// update steps and radii
+					Arrays.setAll( previousSteps, d -> steps[ d ] );
+					Arrays.setAll( previousRadii, d -> radii[ d ] );
+
+					Options options = Options.generateDefaultOptions();
+					options.comparisonRange = range;
+					options.shiftProportion = 1 - ( level < regularization.length ? regularization[ level ] : lastRegularization / 2.0 );
+					options.nIterations = level < iterations.length ? iterations[ level ] : Math.max( lastIteration / 2, 1 );
+					options.regularizationType = level == 0 ? RegularizationType.NONE : RegularizationType.NONE;
+					options.withReorder = false;
+					lastRegularization = regularization[ level ];
+					lastIteration = options.nIterations;
+
+					final JavaRDD< RandomAccessibleInterval< DoubleType > > newCoordinates =
+							matricesAndCoordinates.map( new SparkInference.Inference<>(
+									options,
+									startingCoordinates.length ) );
+
+					long[] coordinatesDims = append( currentDim, startingCoordinates.length );
+					int[] coordinatesBlockSize = append( blockSize, startingCoordinates.length );
+					n5.createDataset( coordinateDataset, coordinatesDims, coordinatesBlockSize, DataType.FLOAT64, new GzipCompression() );
+					newCoordinates.foreach( coordinates -> {
+						final long[] blockPosition = new long[ coordinates.numDimensions() ];
+						Arrays.setAll( blockPosition, d -> coordinates.min( d ) / coordinatesBlockSize[ d ] );
+						N5Utils.saveBlock( coordinates, N5Helpers.n5Writer( root ), coordinateDataset, blockPosition );
+					} );
+				}
 
 				for ( int d = 0; d < steps.length; ++d )
 				{
 					steps[ d ] = Math.max( steps[ d ] / 2, 1 );
 					radii[ d ] = Math.max( steps[ d ] / 2, 1 );
 				}
-
-				Options options = Options.generateDefaultOptions();
-				options.comparisonRange = range;
-				options.coordinateUpdateRegularizerWeight = level < regularization.length ? regularization[ level ] : lastRegularization / 2.0;
-				options.nIterations = level < iterations.length ? iterations[ level ] : Math.max( lastIteration / 2, 1 );
-				options.regularizationType = level == 0 ? RegularizationType.BORDER : RegularizationType.NONE;
-				lastRegularization = options.coordinateUpdateRegularizerWeight;
-				lastIteration = options.nIterations;
-
-				final JavaRDD< RandomAccessibleInterval< DoubleType > > newCoordinates =
-						matricesAndCoordinates.map( new SparkInference.Inference<>(
-								options,
-								startingCoordinates.length ) );
-
-				long[] coordinatesDims = append( currentDim, filenames.size() );
-				int[] coordinatesBlockSize = append( blockSize, filenames.size() );
-				n5.createDataset( coordinateDataset, coordinatesDims, coordinatesBlockSize, DataType.FLOAT64, new GzipCompression() );
-				newCoordinates.foreach( coordinates -> {
-					final long[] blockPosition = new long[ coordinates.numDimensions() ];
-					Arrays.setAll( blockPosition, d -> coordinates.min( d ) / coordinatesBlockSize[ d ] );
-					N5Utils.saveBlock( coordinates, N5Helpers.n5Writer( root ), coordinateDataset, blockPosition );
-				} );
 
 			}
 
@@ -413,6 +385,45 @@ public class NonPlanarAxialDistortionCorrection
 		return IntStream
 				.concat( Arrays.stream( array ), IntStream.of( appendix ) )
 				.toArray();
+	}
+
+	public static < T extends NativeType< T > & RealType< T > > void makeMatrices(
+			final JavaSparkContext sc,
+			final List< long[] > positions,
+			final long[] sourceDim,
+			final long[] matrixDim,
+			final long[] radii,
+			final long[] steps,
+			final int range,
+			final String sourceRoot,
+			final String sourceDataset,
+			final String root,
+			final String matrixDataset ) throws Exception
+	{
+		if ( positions.size() > sourceDim[ 2 ] )
+		{
+			MatricesFromN5ParallelizeOverXY.makeMatrices(
+					sc,
+					sc.parallelize( positions ).map( Arrays::asList ),
+					matrixDim,
+					radii,
+					range,
+					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
+					root,
+					matrixDataset );
+		}
+		else
+		{
+			MatricesFromN5ParallelizeOverZ.makeMatrices(
+					sc,
+					LongStream.of( sourceDim ).limit( 2 ).toArray(),
+					steps,
+					radii,
+					range,
+					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
+					root,
+					matrixDataset );
+		}
 	}
 
 }

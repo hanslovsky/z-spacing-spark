@@ -109,7 +109,7 @@ public class SparkInference
 				final RandomAccessibleInterval< T > matrix = MatrixStripConversion.stripToMatrix( strip, extension );
 				final Composite< U > initCoord = initialCoordinatesCursor.next();
 				final RealComposite< U > targetCoord = targetCoordinatesCursor.next();
-				final AbstractCorrelationFit corrFit = options.estimateWindowRadius < 0 ? new GlobalCorrelationFitAverage() : new LocalCorrelationFitAverage( ( int ) matrix.dimension( 1 ), options );;
+				final AbstractCorrelationFit corrFit = options.estimateWindowRadius < 0 ? new GlobalCorrelationFitAverage() : new LocalCorrelationFitAverage( ( int ) matrix.dimension( 1 ), options );
 				final InferFromMatrix inference = new InferFromMatrix( corrFit );
 				final Visitor visitor = new LazyVisitor();
 				try
@@ -125,7 +125,6 @@ public class SparkInference
 					{
 						if ( Double.isNaN( c ) )
 						{
-							System.err.println( "Inferred NaN value for coordinate " + new Point( matrixCursor ) );
 							coordinatesAreFinite = false;
 							break;
 						}

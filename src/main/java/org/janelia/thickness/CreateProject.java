@@ -1,10 +1,7 @@
 package org.janelia.thickness;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 
@@ -22,10 +19,13 @@ public class CreateProject
 			name = "create-distortion-correction-project"
 			)
 	public static class Arguments implements Callable< Boolean > {
-		@Parameters( index = "0", description = "Path to file containing list paths to image files" )
-		private Path images;
+		@Parameters( index = "0", description = "N5 root for source data" )
+		private String sourceRoot;
+		
+		@Parameters( index = "1", description = "N5 dataset for source data" )
+		private String sourceDataset;
 
-		@Parameters( index = "1", description = "N5 root for integral images and matrices." )
+		@Parameters( index = "2", description = "N5 root for project." )
 		private String root;
 		
 		@Option(
@@ -36,7 +36,7 @@ public class CreateProject
 		private int[] range;
 		
 		@Option(
-				names = { "-i", "--inference-iterations" },
+				names = { "-n", "--num-inference-iterations" },
 				required = true,
 				split = ",",
 				description = "Number of iterations for optimization." )
@@ -48,15 +48,6 @@ public class CreateProject
 				split = ",",
 				description = "Regularization to previous result." )
 		private double[] regularization;
-
-		private final int[] defaultIntegralImageBlockSize = { 10, 10, 1000 };
-
-		@Option(
-				names = { "--integral-image-blocksize" },
-				split = ",",
-				required = false,
-				description = "Block size for 2D integral images. Default = [10, 10, 1000]" )
-		int[] integralImageBlockSize;
 
 		@Option( names = { "-h", "--help" }, usageHelp = true, description = "Show this help message and exit." )
 		private boolean helpRequested;
@@ -76,8 +67,6 @@ public class CreateProject
 				minRange = r;
 			}
 			
-			this.integralImageBlockSize = Optional.ofNullable( this.integralImageBlockSize ).orElse( this.defaultIntegralImageBlockSize );
-			
 			return true;
 		}
 	}
@@ -89,11 +78,10 @@ public class CreateProject
 		if ( !parsedSuccessfully || arguments.helpRequested )
 			return;
 		
-		List< String > filenames = Files.readAllLines( arguments.images );
 		N5Writer n5 = N5Helpers.n5Writer( arguments.root );
 		final String rootGroup = NonPlanarAxialDistortionCorrection.SEPARATOR;
-		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.FILENAMES_ATTRIBUTE, filenames );
-		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.INTEGRAL_IMAGE_BLOCK_SIZE_ATTRIBUTE, arguments.integralImageBlockSize );
+		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.SOURCE_ROOT_ATTRIBUTE, arguments.sourceRoot );
+		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.SOURCE_DATASET_ATTRIBUTE, arguments.sourceDataset );
 		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.RANGE_ATTRIBUTE, arguments.range );
 		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.INFERENCE_ITERATIONS_ATTRIBUTE, arguments.inferenceIterations );
 		n5.setAttribute( rootGroup, NonPlanarAxialDistortionCorrection.REGULARIZATION_ATTRIBUTE, arguments.regularization );

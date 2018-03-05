@@ -54,6 +54,7 @@ public class ShowMatricesAndCoordinates
 		bdv.setDisplayRange( 0, 1 );
 
 		new ImageJ();
+		ImageJFunctions.show( Views.stack( matricesList ), "WTF" );
 		ImageJFunctions.show( matricesStacked, "ok" );
 
 		String coordinatesDataset = level + "/forward";
