@@ -421,7 +421,7 @@ public class NonPlanarAxialDistortionCorrection
 				DataTypeMatcher.toDataType( new DoubleType() ),
 				new GzipCompression() );
 
-		if ( specs.size() > sourceDim[ 2 ] || true )
+		if ( specs.size() > sourceDim[ 2 ] )
 		{
 			MatricesFromN5ParallelizeOverXY.makeMatrices(
 					sc,
