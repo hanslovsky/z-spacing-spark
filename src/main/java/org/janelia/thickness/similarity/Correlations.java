@@ -4,7 +4,6 @@ import ij.process.FloatProcessor;
 import net.imglib2.Cursor;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.numeric.RealType;
-import net.imglib2.util.Intervals;
 import net.imglib2.util.RealSum;
 import net.imglib2.view.Views;
 
@@ -63,19 +62,22 @@ public class Correlations
 		RealSum sumAA = new RealSum();
 		RealSum sumAB = new RealSum();
 		RealSum sumBB = new RealSum();
+		long count = 0;
 	
 		for ( Cursor< T > cursorA = Views.flatIterable( sampleA ).cursor(), cursorB = Views.flatIterable( sampleB ).cursor(); cursorA.hasNext(); )
 		{
 			double a = cursorA.next().getRealDouble();
 			double b = cursorB.next().getRealDouble();
+			if ( Double.isNaN( a ) || Double.isNaN( b ) )
+				continue;
 			sumA.add( a );
 			sumB.add( b );
 			sumAA.add( a * a );
 			sumAB.add( a * b );
 			sumBB.add( b * b );
+			++count;
 		}
 	
-		long count = Intervals.numElements( sampleA );
 		double sumAResult = sumA.getSum();
 		double sumBResult = sumB.getSum();
 		double sumAAResult = sumAA.getSum();
