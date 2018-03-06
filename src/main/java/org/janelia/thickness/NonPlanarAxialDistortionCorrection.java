@@ -216,7 +216,7 @@ public class NonPlanarAxialDistortionCorrection
 
 					final long numElements = Intervals.numElements( currentDim );
 					final int stepSize = ( int ) Math.ceil( Math.sqrt( Math.max( numElements * 1.0 / sc.defaultParallelism(), 1 ) ) );
-					List< long[] > inferenceBlocks = Grids.collectAllOffsets( currentDim, blockSize );
+					List< long[] > inferenceBlocks = Grids.collectAllOffsets( currentDim, new int[] { 1, 1 } );
 
 					JavaRDD< Interval > inferenceBlocksRdd = sc
 							.parallelize( inferenceBlocks )
@@ -253,7 +253,7 @@ public class NonPlanarAxialDistortionCorrection
 									startingCoordinates.length ) );
 
 					long[] coordinatesDims = append( currentDim, startingCoordinates.length );
-					int[] coordinatesBlockSize = append( blockSize, startingCoordinates.length );
+					int[] coordinatesBlockSize = { 1, 1, startingCoordinates.length };// append( blockSize, startingCoordinates.length );
 					n5.createDataset( coordinateDataset, coordinatesDims, coordinatesBlockSize, DataType.FLOAT64, new GzipCompression() );
 					newCoordinates.foreach( coordinates -> {
 						final long[] blockPosition = new long[ coordinates.numDimensions() ];
