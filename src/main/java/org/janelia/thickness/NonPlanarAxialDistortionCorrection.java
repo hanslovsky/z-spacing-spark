@@ -88,6 +88,9 @@ public class NonPlanarAxialDistortionCorrection
 		@Parameters( index = "0", description = "N5 root for integral images and matrices." )
 		private String root;
 
+		@Option( names = { "-g", "--group" }, description = "N5 group for project. Defaults to `z-spacing-correction'" )
+		private String group = "z-spacing-correction";
+
 		@Option(
 				names = "--generate-matrices",
 				required = false,
@@ -118,15 +121,15 @@ public class NonPlanarAxialDistortionCorrection
 		if ( !parsedSuccessfully ) { return; }
 
 		final N5Writer n5 = N5Helpers.n5Writer( cmdLineArgs.root );
-		String rootGroup = SEPARATOR;
+		String rootGroup = cmdLineArgs.group;
 		final int[] ranges = n5.getAttribute( rootGroup, RANGE_ATTRIBUTE, int[].class );
 		final int[] iterations = n5.getAttribute( rootGroup, INFERENCE_ITERATIONS_ATTRIBUTE, int[].class );
 		final double[] regularization = n5.getAttribute( rootGroup, REGULARIZATION_ATTRIBUTE, double[].class );
 
 		final String root = cmdLineArgs.root;
 		N5Reader rootN5 = N5Helpers.n5( root );
-		String sourceRoot = rootN5.getAttribute( SEPARATOR, SOURCE_ROOT_ATTRIBUTE, String.class );
-		String sourceDataset = rootN5.getAttribute( SEPARATOR, SOURCE_DATASET_ATTRIBUTE, String.class );
+		String sourceRoot = rootN5.getAttribute( rootGroup, SOURCE_ROOT_ATTRIBUTE, String.class );
+		String sourceDataset = rootN5.getAttribute( rootGroup, SOURCE_DATASET_ATTRIBUTE, String.class );
 		N5Reader sourceN5 = N5Helpers.n5( sourceRoot );
 		DatasetAttributes sourceAttrs = sourceN5.getDatasetAttributes( sourceDataset );
 		long[] sourceDim = sourceAttrs.getDimensions();
@@ -189,9 +192,9 @@ public class NonPlanarAxialDistortionCorrection
 				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
 				final long[] matrixDim = { currentDim[ 0 ], currentDim[ 1 ], 2 * range + 1, sourceDim[ 2 ] };
 
-				final String matrixDataset = level + SEPARATOR + MATRICES_DATASET;
-				final String coordinateDataset = level + SEPARATOR + FORWARD_DATASET;
-				final String previousCoordinateDataset = ( level - 1 ) + SEPARATOR + FORWARD_DATASET;
+				final String matrixDataset = rootGroup + SEPARATOR + level + SEPARATOR + MATRICES_DATASET;
+				final String coordinateDataset = rootGroup + SEPARATOR + level + SEPARATOR + FORWARD_DATASET;
+				final String previousCoordinateDataset = rootGroup + SEPARATOR + ( level - 1 ) + SEPARATOR + FORWARD_DATASET;
 
 				if ( cmdLineArgs.generateMatrices || !n5.datasetExists( matrixDataset ) )
 				{
