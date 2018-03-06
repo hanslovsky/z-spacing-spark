@@ -32,9 +32,10 @@ public class ShowMatricesAndCoordinates
 	public static void main( final String[] args ) throws IOException
 	{
 
-		final int level = 2;
+		final int level = 1;
 
-		final String root = "/home/hanslovskyp/workspace/z-spacing-n5/project.n5";
+//		final String root = "/home/hanslovskyp/workspace/z-spacing-n5/project.n5";
+		final String root = "/nrs/saalfeld/hanslovskyp/CutOn4-15-2013_ImagedOn1-27-2014/aligned/substacks/1300-3449/4000x2500+5172+1416/downscale-by-2/n5";
 		final String dataset = "z-spacing-correction/" + level + "/matrices";
 		final N5Reader n5 = N5Helpers.n5( root );
 		final RandomAccessibleInterval< DoubleType > matrices = N5Utils.openVolatile( n5, dataset );
