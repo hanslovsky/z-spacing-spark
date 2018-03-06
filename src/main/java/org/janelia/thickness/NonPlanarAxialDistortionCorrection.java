@@ -29,6 +29,7 @@ import org.janelia.thickness.inference.InferFromMatrix.RegularizationType;
 import org.janelia.thickness.inference.Options;
 import org.janelia.thickness.similarity.CorrelationBlockSpec;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY;
+import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY.DataSupplier;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverZ;
 import org.janelia.thickness.utility.DataTypeMatcher;
 import org.janelia.thickness.utility.Grids;
@@ -214,8 +215,8 @@ public class NonPlanarAxialDistortionCorrection
 					final ScaleAndTranslation previousToCurrent = currentToWorld.inverse().concatenate( previousToWorld );
 
 					final Supplier< RandomAccessibleInterval< RealComposite< DoubleType > > > coordinateSupplier =
-							level == 0 ? () -> asComposite( startingCoordinates ) : collapsedDataSupplier( cmdLineArgs.root, previousCoordinateDataset );
-					final Supplier< RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > > matrixSupplier = matrixDataSupplier( cmdLineArgs.root, matrixDataset );
+							level == 0 ? new ConstantCompositeDataSupplier( startingCoordinates ) : collapsedCoordinateSupplier( cmdLineArgs.root, previousCoordinateDataset );
+					final Supplier< RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > > matrixSupplier = collapsedMatrixSupplier( cmdLineArgs.root, matrixDataset );
 
 					final long numElements = Intervals.numElements( currentDim );
 					final int stepSize = ( int ) Math.ceil( Math.sqrt( Math.max( numElements * 1.0 / sc.defaultParallelism(), 1 ) ) );
@@ -247,7 +248,7 @@ public class NonPlanarAxialDistortionCorrection
 					options.nIterations = level < iterations.length ? iterations[ level ] : Math.max( lastIteration / 2, 1 );
 					options.regularizationType = level == 0 ? RegularizationType.NONE : RegularizationType.NONE;
 					options.withReorder = false;
-					lastRegularization = regularization[ level ];
+					lastRegularization = level < regularization.length ? regularization[ level ] : 1 - options.shiftProportion;
 					lastIteration = options.nIterations;
 
 					final JavaRDD< RandomAccessibleInterval< DoubleType > > newCoordinates =
@@ -256,7 +257,8 @@ public class NonPlanarAxialDistortionCorrection
 									startingCoordinates.length ) );
 
 					long[] coordinatesDims = append( currentDim, startingCoordinates.length );
-					int[] coordinatesBlockSize = { 1, 1, startingCoordinates.length };// append( blockSize, startingCoordinates.length );
+					int[] coordinatesBlockSize = { 1, 1, startingCoordinates.length };
+					// append( blockSize, startingCoordinates.length );
 					n5.createDataset( coordinateDataset, coordinatesDims, coordinatesBlockSize, DataType.FLOAT64, new GzipCompression() );
 					newCoordinates.foreach( coordinates -> {
 						final long[] blockPosition = new long[ coordinates.numDimensions() ];
@@ -277,43 +279,23 @@ public class NonPlanarAxialDistortionCorrection
 
 	}
 
-	public static < T extends NativeType< T > > Supplier< RandomAccessibleInterval< RandomAccessibleInterval< T > > > matrixDataSupplier(
-			final String root,
-			final String dataset ) throws IOException
+	public static class ConstantCompositeDataSupplier implements Supplier< RandomAccessibleInterval< RealComposite< DoubleType > > >
 	{
-		final Supplier< RandomAccessibleInterval< T > > dataSupplier = dataSupplier( root, dataset );
-		return () -> collapseToMatrices( dataSupplier.get() );
-	}
 
-	public static < T extends NativeType< T > & RealType< T > > Supplier< RandomAccessibleInterval< RealComposite< T > > > collapsedDataSupplier(
-			final String root,
-			final String dataset ) throws IOException
-	{
-		final Supplier< RandomAccessibleInterval< T > > dataSupplier = dataSupplier( root, dataset );
-		return () -> Views.collapseReal( dataSupplier.get() );
-	}
+		private final double[] data;
 
-	public static < T extends NativeType< T > > Supplier< RandomAccessibleInterval< T > > dataSupplier(
-			final String root,
-			final String dataset ) throws IOException
-	{
-		return dataSupplier( N5Helpers.n5( root ), dataset );
-	}
+		public ConstantCompositeDataSupplier( double[] data )
+		{
+			super();
+			this.data = data;
+		}
 
-	public static < T extends NativeType< T > > Supplier< RandomAccessibleInterval< T > > dataSupplier(
-			final N5Reader reader,
-			final String dataset )
-	{
-		return () -> {
-			try
-			{
-				return N5Utils.open( reader, dataset );
-			}
-			catch ( final IOException e )
-			{
-				throw new RuntimeException( e );
-			}
-		};
+		@Override
+		public RandomAccessibleInterval< RealComposite< DoubleType > > get()
+		{
+			return asComposite( data );
+		}
+
 	}
 
 	public static RandomAccessibleInterval< RealComposite< DoubleType > > asComposite( final double[] data )
@@ -430,7 +412,7 @@ public class NonPlanarAxialDistortionCorrection
 					sc,
 					sc.parallelize( specs ).map( Arrays::asList ),
 					range,
-					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
+					new DataFromN5< DoubleType >( sourceRoot, sourceDataset ),
 					root,
 					matrixDataset,
 					new DoubleType() );
@@ -441,11 +423,116 @@ public class NonPlanarAxialDistortionCorrection
 					sc,
 					specs,
 					range,
-					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
+					new DataFromN5< DoubleType >( sourceRoot, sourceDataset ),
 					root,
 					matrixDataset,
 					new DoubleType() );
 		}
+	}
+
+	public static class DataFromN5< T extends NativeType< T > > implements DataSupplier< RandomAccessibleInterval< T > >
+	{
+
+		private final String root;
+
+		private final String dataset;
+
+		public DataFromN5( String root, String dataset )
+		{
+			super();
+			this.root = root;
+			this.dataset = dataset;
+		}
+
+		@Override
+		public RandomAccessibleInterval< T > get() throws Exception
+		{
+			@SuppressWarnings( "unchecked" )
+			RandomAccessibleInterval< T > data = ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( root ), dataset );
+			return data;
+		}
+	}
+
+	public static class CollapsedSupplier< T extends RealType< T > > implements Supplier< RandomAccessibleInterval< RealComposite< T > > >
+	{
+
+		private final Supplier< RandomAccessibleInterval< T > > dataSupplier;
+
+		public CollapsedSupplier( Supplier< RandomAccessibleInterval< T > > dataSupplier )
+		{
+			super();
+			this.dataSupplier = dataSupplier;
+		}
+
+		@Override
+		public RandomAccessibleInterval< RealComposite< T > > get()
+		{
+			return Views.collapseReal( dataSupplier.get() );
+		}
+
+	}
+
+	public static class DoubleDataSupplier implements Supplier< RandomAccessibleInterval< DoubleType > >
+	{
+
+		private final String n5;
+
+		private final String dataset;
+
+		public DoubleDataSupplier( String n5, String dataset )
+		{
+			super();
+			this.n5 = n5;
+			this.dataset = dataset;
+		}
+
+		@Override
+		public RandomAccessibleInterval< DoubleType > get()
+		{
+			try
+			{
+				return N5Utils.open( N5Helpers.n5( n5 ), dataset );
+			}
+			catch ( IOException e )
+			{
+				throw new RuntimeException( e );
+			}
+		}
+
+	}
+
+	public static Supplier< RandomAccessibleInterval< RealComposite< DoubleType > > > collapsedCoordinateSupplier( String n5, String dataset )
+	{
+		return new CollapsedSupplier<>( new DoubleDataSupplier( n5, dataset ) );
+	}
+
+	public static class CollapsedRandomAccessibleIntervalSupplier< T > implements Supplier< RandomAccessibleInterval< RandomAccessibleInterval< T > > >
+	{
+
+		private final Supplier< RandomAccessibleInterval< T > > dataSupplier;
+
+		private final int numCollapsedDimensions;
+
+		public CollapsedRandomAccessibleIntervalSupplier( Supplier< RandomAccessibleInterval< T > > dataSupplier, int numCollapsedDimensions )
+		{
+			super();
+			this.dataSupplier = dataSupplier;
+			this.numCollapsedDimensions = numCollapsedDimensions;
+		}
+
+		@Override
+		public RandomAccessibleInterval< RandomAccessibleInterval< T > > get()
+		{
+			return new CollapsedRandomAccessibleInterval<>( dataSupplier.get(), numCollapsedDimensions );
+		}
+	}
+
+	public static Supplier< RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > > collapsedMatrixSupplier(
+			final String n5,
+			final String dataset
+	)
+	{
+		return new CollapsedRandomAccessibleIntervalSupplier<>( new DoubleDataSupplier( n5, dataset ), 2 );
 	}
 
 }
