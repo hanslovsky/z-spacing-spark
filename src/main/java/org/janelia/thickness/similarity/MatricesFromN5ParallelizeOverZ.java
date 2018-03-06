@@ -12,8 +12,6 @@ import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
-import org.janelia.saalfeldlab.n5.Compression;
-import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY.DataSupplier;
@@ -21,13 +19,11 @@ import org.janelia.thickness.utility.N5Helpers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import net.imglib2.Interval;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.img.array.ArrayImgFactory;
 import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.RealType;
-import net.imglib2.type.numeric.real.DoubleType;
 import net.imglib2.util.Intervals;
 import net.imglib2.view.Views;
 import scala.Tuple2;
@@ -37,45 +33,25 @@ public class MatricesFromN5ParallelizeOverZ
 
 	private static final Logger LOG = LoggerFactory.getLogger( MethodHandles.lookup().lookupClass() );
 
-	public static < T extends NativeType< T > & RealType< T >, U extends NativeType< U > & RealType< U > > void makeMatrices(
-			JavaSparkContext sc,
-			List< Tuple2< long[], Interval > > blocks,
-			final int range,
-			final DataSupplier< RandomAccessibleInterval< T > > dataSupplier,
-			final String root,
-			final String datasetMatrix ) throws Exception
-	{
-		makeMatrices( sc, blocks, range, dataSupplier, root, datasetMatrix, new GzipCompression(), sc.broadcast( new DoubleType() ) );
-	}
-
 	public static < T extends NativeType< T > & RealType< T >, U extends RealType< U > & NativeType< U > > void makeMatrices(
 			JavaSparkContext sc,
-			List< Tuple2< long[], Interval > > blocks,
+			List< CorrelationBlockSpec > blockSpecs,
 			final int range,
 			final DataSupplier< RandomAccessibleInterval< T > > dataSupplier,
 			final String root,
 			final String datasetMatrix,
-			final Compression compression,
-			final Broadcast< U > matrixType ) throws Exception
+			final U matrixType ) throws Exception
 	{
 		long[] dims = Intervals.dimensionsAsLongArray( dataSupplier.get() );
 
 		assert dims.length == 3;
 
-		final long[] datasetDims = new long[] { 0, 0, 2 * range + 1, dims[ 2 ] };
-		for ( long[] b : ( Iterable< long[] > ) ( blocks.stream().map( Tuple2::_1 )::iterator ) )
-		{
-			datasetDims[ 0 ] = Math.max( b[ 0 ], datasetDims[ 0 ] );
-			datasetDims[ 1 ] = Math.max( b[ 1 ], datasetDims[ 1 ] );
-		}
-
-		datasetDims[ 0 ] += 1;
-		datasetDims[ 1 ] += 1;
-
 		JavaRDD< Long > sliceIndices = sc.parallelize( LongStream.range( 0, dims[ 2 ] ).mapToObj( Long::new ).collect( Collectors.toList() ) );
 
+		Broadcast< U > matrixTypeBC = sc.broadcast( matrixType );
+
 		Broadcast< DataSupplier< RandomAccessibleInterval< T > > > dataSupplierBroadcast = sc.broadcast( dataSupplier );
-		Broadcast< List< Tuple2< long[], Interval > > > blocksBroadcast = sc.broadcast( blocks );
+		Broadcast< List< CorrelationBlockSpec > > blockSpecsBroadcast = sc.broadcast( blockSpecs );
 
 		JavaPairRDD< Tuple2< Long, Long >, Tuple2< Long, double[] > > xyToSectionAndCorrelationsMapping = sliceIndices
 				.map( sectionIndex -> {
@@ -83,14 +59,14 @@ public class MatricesFromN5ParallelizeOverZ
 					long[] dataDims = Intervals.dimensionsAsLongArray( data );
 					long maxOtherSectionIndex = Math.min( sectionIndex + range + 1, dataDims[ 2 ] - 1 );
 					final List< Tuple2< Tuple2< Long, Long >, Tuple2< Long, double[] > > > allCorrelations = new ArrayList<>();
-					for ( Tuple2< long[], Interval > block : blocksBroadcast.getValue() )
+					for ( CorrelationBlockSpec blockSpec : blockSpecsBroadcast.getValue() )
 					{
 						double[] correlations = new double[ ( int ) Math.min( range, maxOtherSectionIndex - sectionIndex ) ];
-						allCorrelations.add( new Tuple2<>( new Tuple2<>( block._1()[ 0 ], block._1()[ 1 ] ), new Tuple2<>( sectionIndex, correlations ) ) );
-						RandomAccessibleInterval< T > s1 = Views.interval( Views.hyperSlice( data, 2, sectionIndex ), block._2() );
+						allCorrelations.add( new Tuple2<>( fromArray( blockSpec.blockPosition ), new Tuple2<>( sectionIndex, correlations ) ) );
+						RandomAccessibleInterval< T > s1 = Views.interval( Views.hyperSlice( data, 2, sectionIndex ), blockSpec.min, blockSpec.max );
 						for ( long z = sectionIndex + 1, r = 1; z <= maxOtherSectionIndex && r <= range; ++z, ++r )
 						{
-							RandomAccessibleInterval< T > s2 = Views.interval( Views.hyperSlice( data, 2, z ), block._2() );
+							RandomAccessibleInterval< T > s2 = Views.interval( Views.hyperSlice( data, 2, z ), blockSpec.min, blockSpec.max );
 							correlations[ ( int ) ( r - 1 ) ] = Correlations.pearsonCorrelationCoefficientSquared( s1, s2 );
 						}
 					}
@@ -105,7 +81,9 @@ public class MatricesFromN5ParallelizeOverZ
 				.reduceByKey( ( l1, l2 ) -> Stream.concat( l1.stream(), l2.stream() ).collect( Collectors.toList() ) )
 				.mapValues( indicesWithCorrelations -> {
 
-					RandomAccessibleInterval< U > matrix = new ArrayImgFactory< U >().create( new long[] { 1, 1, 2 * range + 1, dims[ 2 ] }, matrixType.getValue().createVariable() );
+					RandomAccessibleInterval< U > matrix = new ArrayImgFactory< U >().create(
+							new long[] { 1, 1, 2 * range + 1, dims[ 2 ] },
+							matrixTypeBC.getValue().createVariable() );
 					initialize( matrix, Double.NaN );
 					Views.hyperSlice( matrix, 2, range ).forEach( RealType::setOne );
 					RandomAccess< U > matrixAccess1 = Views.hyperSlice( Views.hyperSlice( matrix, 0, 0l ), 0, 0l ).randomAccess();
@@ -150,6 +128,14 @@ public class MatricesFromN5ParallelizeOverZ
 		{
 			m.setReal( value );
 		}
+	}
+
+	public static Tuple2< Long, Long > fromArray( long[] arr )
+	{
+
+		assert arr.length >= 2;
+
+		return new Tuple2<>( arr[ 0 ], arr[ 1 ] );
 	}
 
 }

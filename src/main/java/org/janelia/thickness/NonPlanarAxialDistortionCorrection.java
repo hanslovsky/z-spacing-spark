@@ -27,6 +27,7 @@ import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.SparkInference.InputData;
 import org.janelia.thickness.inference.InferFromMatrix.RegularizationType;
 import org.janelia.thickness.inference.Options;
+import org.janelia.thickness.similarity.CorrelationBlockSpec;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverZ;
 import org.janelia.thickness.utility.DataTypeMatcher;
@@ -57,7 +58,6 @@ import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
-import scala.Tuple2;
 
 public class NonPlanarAxialDistortionCorrection
 {
@@ -147,7 +147,8 @@ public class NonPlanarAxialDistortionCorrection
 
 			final long[] steps = new long[ 2 ];
 			final long[] radii = new long[ 2 ];
-			long[] imgDim = LongStream.of( sourceDim ).limit( 2 ).toArray();
+			final long[] imgDim = LongStream.of( sourceDim ).limit( 2 ).toArray();
+			final long[] imgMax = LongStream.of( imgDim ).map( d -> d - 1 ).toArray();
 
 			for ( int d = 0; d < steps.length; ++d )
 			{
@@ -168,8 +169,15 @@ public class NonPlanarAxialDistortionCorrection
 
 				final int range = ranges[ level ];
 
-				final List< long[] > positions = Grids
-						.collectAllOffsets( imgDim, Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray() );
+				final int[] blockSize = Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray();
+
+				final List< long[] > positions = Grids.collectAllOffsets( imgDim, blockSize );
+				final long[] extent = Arrays.stream( radii ).map( r -> 2 * r + 1 ).toArray();
+
+				final List< CorrelationBlockSpec > specs = positions
+						.stream()
+						.map( p -> CorrelationBlockSpec.asSpec( p, blockSize, extent, imgMax ) )
+						.collect( Collectors.toList() );
 
 				final long[] maxPosition = new long[] { 0, 0 };
 				positions
@@ -177,6 +185,7 @@ public class NonPlanarAxialDistortionCorrection
 						.map( long[]::clone )
 						.map( a -> divide( a, steps, a ) )
 						.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
+
 				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
 				final long[] matrixDim = { currentDim[ 0 ], currentDim[ 1 ], 2 * range + 1, sourceDim[ 2 ] };
 
@@ -186,7 +195,7 @@ public class NonPlanarAxialDistortionCorrection
 
 				if ( cmdLineArgs.generateMatrices || !n5.datasetExists( matrixDataset ) )
 				{
-					makeMatrices( sc, positions, sourceDim, matrixDim, radii, steps, range, sourceRoot, sourceDataset, root, matrixDataset );
+					makeMatrices( sc, specs, sourceDim, matrixDim, range, sourceRoot, sourceDataset, root, matrixDataset );
 				}
 
 				if ( !cmdLineArgs.matricesOnly )
@@ -207,7 +216,6 @@ public class NonPlanarAxialDistortionCorrection
 
 					final long numElements = Intervals.numElements( currentDim );
 					final int stepSize = ( int ) Math.ceil( Math.sqrt( Math.max( numElements * 1.0 / sc.defaultParallelism(), 1 ) ) );
-					final int[] blockSize = IntStream.generate( () -> stepSize ).limit( currentDim.length ).toArray();
 					List< long[] > inferenceBlocks = Grids.collectAllOffsets( currentDim, blockSize );
 
 					JavaRDD< Interval > inferenceBlocksRdd = sc
@@ -396,11 +404,9 @@ public class NonPlanarAxialDistortionCorrection
 
 	public static < T extends NativeType< T > & RealType< T > > void makeMatrices(
 			final JavaSparkContext sc,
-			final List< long[] > positions,
+			final List< CorrelationBlockSpec > specs,
 			final long[] sourceDim,
 			final long[] matrixDim,
-			final long[] radii,
-			final long[] steps,
 			final int range,
 			final String sourceRoot,
 			final String sourceDataset,
@@ -415,34 +421,27 @@ public class NonPlanarAxialDistortionCorrection
 				DataTypeMatcher.toDataType( new DoubleType() ),
 				new GzipCompression() );
 
-		if ( positions.size() > sourceDim[ 2 ] )
+		if ( specs.size() > sourceDim[ 2 ] || true )
 		{
 			MatricesFromN5ParallelizeOverXY.makeMatrices(
 					sc,
-					sc.parallelize( positions ).map( a -> divide( a, steps, a ) ).map( Arrays::asList ),
-					matrixDim,
-					radii,
+					sc.parallelize( specs ).map( Arrays::asList ),
 					range,
 					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
 					root,
-					matrixDataset );
+					matrixDataset,
+					new DoubleType() );
 		}
 		else
 		{
-			List< Tuple2< long[], Interval > > positionsWithInterval = positions.stream().map( position -> {
-				long[] min = position.clone();
-				long[] max = new long[ min.length ];
-				Arrays.setAll( max, d -> Math.min( min[ d ] + 2 * radii[ d ], sourceDim[ d ] - 1 ) );
-				Arrays.setAll( position, d -> position[ d ] / steps[ d ] );
-				return new Tuple2< long[], Interval >( position, new FinalInterval( min, max ) );
-			} ).collect( Collectors.toList() );
 			MatricesFromN5ParallelizeOverZ.makeMatrices(
 					sc,
-					positionsWithInterval,
+					specs,
 					range,
 					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
 					root,
-					matrixDataset );
+					matrixDataset,
+					new DoubleType() );
 		}
 	}
 
