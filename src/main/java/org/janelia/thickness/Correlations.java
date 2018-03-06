@@ -60,9 +60,10 @@ public class Correlations
 		return ( n * sumab - suma * sumb ) / Math.sqrt( n * sumaa - suma * suma ) / Math.sqrt( n * sumbb - sumb * sumb );
 	}
 
-	public static void calculate( final FloatProcessor img1, final FloatProcessor img2, final int[] min, // in
-																											// img1
-																											// coordinates
+	public static void calculate( 
+			final FloatProcessor img1, 
+			final FloatProcessor img2,
+			final int[] min, // in img1 coordinates
 			final int[] max, // in img1 coordinates
 			final Tuple6< RealSum, RealSum, RealSum, RealSum, RealSum, LongType > sums )
 	{
@@ -91,10 +92,7 @@ public class Correlations
 		sums._6().set( n );
 	}
 
-	public static FPTuple calculate( final HashMap< Tuple2< Integer, Integer >, FPTuple[] > hm, /*
-																								 * x,
-																								 * y
-																								 */
+	public static FPTuple calculate( final HashMap< Tuple2< Integer, Integer >, FPTuple[] > hm,
 			final Tuple2< Integer, Integer > min, final Tuple2< Integer, Integer > max, final int[] blockSize, final int range )
 	{
 
@@ -158,6 +156,11 @@ public class Correlations
 
 	public static class Calculate< K > implements PairFunction< Tuple2< K, Tuple2< FPTuple, FPTuple > >, K, Double >
 	{
+
+		/**
+		 * 
+		 */
+		private static final long serialVersionUID = -2100509719455523081L;
 
 		@Override
 		public Tuple2< K, Double > call( final Tuple2< K, Tuple2< FPTuple, FPTuple > > t ) throws Exception
