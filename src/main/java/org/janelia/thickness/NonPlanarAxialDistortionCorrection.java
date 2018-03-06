@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
@@ -28,6 +29,7 @@ import org.janelia.thickness.inference.InferFromMatrix.RegularizationType;
 import org.janelia.thickness.inference.Options;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverZ;
+import org.janelia.thickness.utility.DataTypeMatcher;
 import org.janelia.thickness.utility.Grids;
 import org.janelia.thickness.utility.N5Helpers;
 
@@ -55,6 +57,7 @@ import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
+import scala.Tuple2;
 
 public class NonPlanarAxialDistortionCorrection
 {
@@ -166,10 +169,14 @@ public class NonPlanarAxialDistortionCorrection
 				final int range = ranges[ level ];
 
 				final List< long[] > positions = Grids
-						.collectAllOffsets( imgDim, Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray(), a -> divide( a, steps, a ) );
+						.collectAllOffsets( imgDim, Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray() );
 
 				final long[] maxPosition = new long[] { 0, 0 };
-				positions.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
+				positions
+						.stream()
+						.map( long[]::clone )
+						.map( a -> divide( a, steps, a ) )
+						.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
 				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
 				final long[] matrixDim = { currentDim[ 0 ], currentDim[ 1 ], 2 * range + 1, sourceDim[ 2 ] };
 
@@ -400,11 +407,19 @@ public class NonPlanarAxialDistortionCorrection
 			final String root,
 			final String matrixDataset ) throws Exception
 	{
+
+		N5Helpers.n5Writer( root ).createDataset(
+				matrixDataset,
+				matrixDim,
+				new int[] { 1, 1, ( int ) matrixDim[ 2 ], ( int ) matrixDim[ 3 ] },
+				DataTypeMatcher.toDataType( new DoubleType() ),
+				new GzipCompression() );
+
 		if ( positions.size() > sourceDim[ 2 ] )
 		{
 			MatricesFromN5ParallelizeOverXY.makeMatrices(
 					sc,
-					sc.parallelize( positions ).map( Arrays::asList ),
+					sc.parallelize( positions ).map( a -> divide( a, steps, a ) ).map( Arrays::asList ),
 					matrixDim,
 					radii,
 					range,
@@ -414,11 +429,16 @@ public class NonPlanarAxialDistortionCorrection
 		}
 		else
 		{
+			List< Tuple2< long[], Interval > > positionsWithInterval = positions.stream().map( position -> {
+				long[] min = position.clone();
+				long[] max = new long[ min.length ];
+				Arrays.setAll( max, d -> Math.min( min[ d ] + 2 * radii[ d ], sourceDim[ d ] - 1 ) );
+				Arrays.setAll( position, d -> position[ d ] / steps[ d ] );
+				return new Tuple2< long[], Interval >( position, new FinalInterval( min, max ) );
+			} ).collect( Collectors.toList() );
 			MatricesFromN5ParallelizeOverZ.makeMatrices(
 					sc,
-					LongStream.of( sourceDim ).limit( 2 ).toArray(),
-					steps,
-					radii,
+					positionsWithInterval,
 					range,
 					() -> ( RandomAccessibleInterval< T > ) N5Utils.open( N5Helpers.n5( sourceRoot ), sourceDataset ),
 					root,

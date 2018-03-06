@@ -13,7 +13,6 @@ import org.janelia.saalfeldlab.n5.Compression;
 import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
-import org.janelia.thickness.utility.DataTypeMatcher;
 import org.janelia.thickness.utility.N5Helpers;
 
 import net.imglib2.RandomAccess;
@@ -61,11 +60,6 @@ public class MatricesFromN5ParallelizeOverXY
 			final Compression compression,
 			final Broadcast< U > matrixType ) throws Exception
 	{
-		N5Helpers.n5Writer( root ).createDataset(
-				datasetMatrix,
-				matrixDims,
-				new int[] { 1, 1, ( int ) matrixDims[ 2 ], ( int ) matrixDims[ 3 ] },
-				DataTypeMatcher.toDataType( matrixType.getValue() ), compression );
 		locations.foreach( new GenerateMatrices<>(
 				sc.broadcast( dataSupplier ),
 				root,

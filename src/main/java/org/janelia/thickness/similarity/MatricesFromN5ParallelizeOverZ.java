@@ -17,13 +17,10 @@ import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverXY.DataSupplier;
-import org.janelia.thickness.utility.DataTypeMatcher;
-import org.janelia.thickness.utility.Grids;
 import org.janelia.thickness.utility.N5Helpers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
@@ -42,41 +39,13 @@ public class MatricesFromN5ParallelizeOverZ
 
 	public static < T extends NativeType< T > & RealType< T >, U extends NativeType< U > & RealType< U > > void makeMatrices(
 			JavaSparkContext sc,
-			long[] dims,
-			long[] steps,
-			long[] radius,
+			List< Tuple2< long[], Interval > > blocks,
 			final int range,
 			final DataSupplier< RandomAccessibleInterval< T > > dataSupplier,
 			final String root,
 			final String datasetMatrix ) throws Exception
 	{
-		makeMatrices( sc, dims, steps, radius, range, dataSupplier, root, datasetMatrix, new GzipCompression(), sc.broadcast( new DoubleType() ) );
-	}
-
-	public static < T extends NativeType< T > & RealType< T >, U extends NativeType< U > & RealType< U > > void makeMatrices(
-			JavaSparkContext sc,
-			long[] dims,
-			long[] steps,
-			long[] radius,
-			final int range,
-			final DataSupplier< RandomAccessibleInterval< T > > dataSupplier,
-			final String root,
-			final String datasetMatrix,
-			final Compression compression,
-			final Broadcast< U > matrixType ) throws Exception
-	{
-		List< Tuple2< long[], Interval > > blocks = Grids.collectAllOffsets(
-				dims,
-				LongStream.of( steps ).mapToInt( l -> ( int ) l ).toArray(),
-				position -> {
-					long[] min = new long[ 2 ];
-					long[] max = new long[ 2 ];
-					Arrays.setAll( min, d -> Math.max( position[ d ], 0 ) );
-					Arrays.setAll( max, d -> Math.min( position[ d ] + 2 * radius[ d ] + 1, dims[ d ] - 1 ) );
-					Arrays.setAll( position, d -> position[ d ] / steps[ d ] );
-					return new Tuple2<>( position, new FinalInterval( min, max ) );
-				} );
-		makeMatrices( sc, blocks, range, dataSupplier, root, datasetMatrix, compression, matrixType );
+		makeMatrices( sc, blocks, range, dataSupplier, root, datasetMatrix, new GzipCompression(), sc.broadcast( new DoubleType() ) );
 	}
 
 	public static < T extends NativeType< T > & RealType< T >, U extends RealType< U > & NativeType< U > > void makeMatrices(
@@ -102,12 +71,6 @@ public class MatricesFromN5ParallelizeOverZ
 
 		datasetDims[ 0 ] += 1;
 		datasetDims[ 1 ] += 1;
-
-		N5Helpers.n5Writer( root ).createDataset(
-				datasetMatrix,
-				datasetDims,
-				new int[] { 1, 1, 2 * range + 1, ( int ) dims[ 2 ] },
-				DataTypeMatcher.toDataType( matrixType.getValue() ), compression );
 
 		JavaRDD< Long > sliceIndices = sc.parallelize( LongStream.range( 0, dims[ 2 ] ).mapToObj( Long::new ).collect( Collectors.toList() ) );
 
