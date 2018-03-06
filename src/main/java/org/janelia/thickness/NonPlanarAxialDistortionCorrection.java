@@ -176,7 +176,7 @@ public class NonPlanarAxialDistortionCorrection
 
 				final List< CorrelationBlockSpec > specs = positions
 						.stream()
-						.map( p -> CorrelationBlockSpec.asSpec( p, blockSize, extent, imgMax ) )
+						.map( p -> CorrelationBlockSpec.asSpec( p, blockSize, extent, imgMax, true ) )
 						.collect( Collectors.toList() );
 
 				final long[] maxPosition = new long[] { 0, 0 };

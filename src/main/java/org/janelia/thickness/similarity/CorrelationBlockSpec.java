@@ -27,11 +27,23 @@ public class CorrelationBlockSpec implements Serializable
 
 	public static CorrelationBlockSpec asSpec( long[] min, int[] blockSize, long[] extent, long[] maxCap )
 	{
+		return asSpec( min, blockSize, extent, maxCap, false );
+	}
+
+	public static CorrelationBlockSpec asSpec( long[] min, int[] blockSize, long[] extent, long[] maxCap, boolean ensureFullSize )
+	{
+		return asSpec( min, blockSize, extent, maxCap, new long[ min.length ], ensureFullSize );
+	}
+
+	public static CorrelationBlockSpec asSpec( long[] min, int[] blockSize, long[] extent, long[] maxCap, long[] minCap, boolean ensureFullSize )
+	{
 		long[] blockPosition = new long[ min.length ];
 		long[] max = new long[ min.length ];
+		long[] actualMin = min.clone();
 		Arrays.setAll( blockPosition, d -> min[ d ] / blockSize[ d ] );
-		Arrays.setAll( max, d -> Math.min( min[ d ] + extent[ d ], maxCap[ d ] ) );
-		return new CorrelationBlockSpec( blockPosition, min, max );
+		Arrays.setAll( max, d -> Math.min( min[ d ] + extent[ d ] - 1, maxCap[ d ] ) );
+		Arrays.setAll( actualMin, d -> ( ensureFullSize && max[ d ] == maxCap[ d ] ) ? Math.max( max[ d ] - ( extent[ d ] - 1 ), minCap[ d ] ) : min[ d ] );
+		return new CorrelationBlockSpec( blockPosition, actualMin, max );
 	}
 
 }
