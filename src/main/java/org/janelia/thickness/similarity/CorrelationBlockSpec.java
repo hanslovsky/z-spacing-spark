@@ -62,6 +62,13 @@ public class CorrelationBlockSpec implements Serializable
 			long r = radius[ d ] + halo;
 			blockMin[ d ] = Math.max( ( long ) Math.ceil( c - r ), bounds.min( d ) );
 			blockMax[ d ] = Math.min( ( long ) Math.floor( c + r ), bounds.max( d ) );
+
+			if ( blockMin[ d ] == bounds.min( d ) )
+				blockMin[ d ] = Math.max( blockMax[ d ] - 2 * r, bounds.min( d ) );
+
+			if ( blockMax[ d ] == bounds.max( d ) )
+				blockMax[ d ] = Math.min( blockMin[ d ] + 2 * r, bounds.max( d ) );
+
 		}
 
 		return new CorrelationBlockSpec( gridPos, blockMin, blockMax );
