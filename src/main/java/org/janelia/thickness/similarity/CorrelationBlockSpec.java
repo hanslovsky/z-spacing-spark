@@ -3,6 +3,9 @@ package org.janelia.thickness.similarity;
 import java.io.Serializable;
 import java.util.Arrays;
 
+import net.imglib2.FinalInterval;
+import net.imglib2.Interval;
+
 public class CorrelationBlockSpec implements Serializable
 {
 
@@ -17,6 +20,13 @@ public class CorrelationBlockSpec implements Serializable
 
 	public final long[] max;
 
+	public static interface GridPositionToRealWorld
+	{
+
+		public double map( long position, int dimension );
+
+	}
+
 	public CorrelationBlockSpec( long[] blockPosition, long[] min, long[] max )
 	{
 		super();
@@ -25,25 +35,49 @@ public class CorrelationBlockSpec implements Serializable
 		this.max = max;
 	}
 
-	public static CorrelationBlockSpec asSpec( long[] min, int[] blockSize, long[] extent, long[] maxCap )
+	public static CorrelationBlockSpec asSpec(
+			final long[] gridPos,
+			final long[] radius,
+			final int halo,
+			final long[] min,
+			final long[] max,
+			final GridPositionToRealWorld gridPosInRealWorld )
 	{
-		return asSpec( min, blockSize, extent, maxCap, false );
+		return asSpec( gridPos, radius, halo, new FinalInterval( min, max ), gridPosInRealWorld );
 	}
 
-	public static CorrelationBlockSpec asSpec( long[] min, int[] blockSize, long[] extent, long[] maxCap, boolean ensureFullSize )
+	public static CorrelationBlockSpec asSpec(
+			final long[] gridPos,
+			final long[] radius,
+			final int halo,
+			Interval bounds,
+			final GridPositionToRealWorld gridPosInRealWorld )
 	{
-		return asSpec( min, blockSize, extent, maxCap, new long[ min.length ], ensureFullSize );
+		final long[] blockMin = new long[ gridPos.length ];
+		final long[] blockMax = new long[ gridPos.length ];
+
+		for ( int d = 0; d < gridPos.length; ++d )
+		{
+			double c = gridPosInRealWorld.map( gridPos[ d ], d );
+			long r = radius[ d ] + halo;
+			blockMin[ d ] = Math.max( ( long ) Math.ceil( c - r ), bounds.min( d ) );
+			blockMax[ d ] = Math.min( ( long ) Math.floor( c + r ), bounds.max( d ) );
+		}
+
+		return new CorrelationBlockSpec( gridPos, blockMin, blockMax );
+
 	}
 
-	public static CorrelationBlockSpec asSpec( long[] min, int[] blockSize, long[] extent, long[] maxCap, long[] minCap, boolean ensureFullSize )
+	@Override
+	public String toString()
 	{
-		long[] blockPosition = new long[ min.length ];
-		long[] max = new long[ min.length ];
-		long[] actualMin = min.clone();
-		Arrays.setAll( blockPosition, d -> min[ d ] / blockSize[ d ] );
-		Arrays.setAll( max, d -> Math.min( min[ d ] + extent[ d ] - 1, maxCap[ d ] ) );
-		Arrays.setAll( actualMin, d -> ( ensureFullSize && max[ d ] == maxCap[ d ] ) ? Math.max( max[ d ] - ( extent[ d ] - 1 ), minCap[ d ] ) : min[ d ] );
-		return new CorrelationBlockSpec( blockPosition, actualMin, max );
+		return String.format(
+				"(%s: pos=%s, min=%s, max=%s)",
+				getClass().getSimpleName(),
+				Arrays.toString( this.blockPosition ),
+				Arrays.toString( this.min ),
+				Arrays.toString( this.max ) );
+
 	}
 
 }

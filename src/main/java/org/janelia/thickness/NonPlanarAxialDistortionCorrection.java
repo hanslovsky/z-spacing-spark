@@ -34,6 +34,8 @@ import org.janelia.thickness.similarity.MatricesFromN5ParallelizeOverZ;
 import org.janelia.thickness.utility.DataTypeMatcher;
 import org.janelia.thickness.utility.Grids;
 import org.janelia.thickness.utility.N5Helpers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
@@ -63,6 +65,8 @@ import picocli.CommandLine.Parameters;
 public class NonPlanarAxialDistortionCorrection
 {
 
+	private static final Logger LOG = LoggerFactory.getLogger( MethodHandles.lookup().lookupClass() );
+
 	public static final String MATRICES_DATASET = "matrices";
 
 	public static String SEPARATOR = "/";
@@ -77,9 +81,15 @@ public class NonPlanarAxialDistortionCorrection
 
 	public static String REGULARIZATION_ATTRIBUTE = "regularization";
 
+	public static String STEP_SIZE_ATTRIBUTE = "stepSize";
+
 	public static String SOURCE_ROOT_ATTRIBUTE = "sourceRoot";
 
 	public static String SOURCE_DATASET_ATTRIBUTE = "sourceDataset";
+
+	public static String HALO_ATTRIBUTE = "halo";
+
+	private static final int[] ONES_2D = { 1, 1 };
 
 	@Command(
 			name = "distortion-correction",
@@ -93,15 +103,15 @@ public class NonPlanarAxialDistortionCorrection
 		private String group = "z-spacing-correction";
 
 		@Option(
-				names = "--generate-matrices",
+				names = "--overwrite",
 				required = false,
-				description = "If specified, generate matrices even when dataset exists." )
-		private boolean generateMatrices;
+				description = "If specified, overwrite existing data. Otherwise, skip matrix generation/inference if data is not present." )
+		private boolean overwrite;
 
 		@Option(
 				names = { "--matrices-only", "-m" },
 				required = false,
-				description = "Generamte matrices only, do not run inference." )
+				description = "Generate matrices only, do not run inference." )
 		private boolean matricesOnly;
 
 		@Override
@@ -126,6 +136,8 @@ public class NonPlanarAxialDistortionCorrection
 		final int[] ranges = n5.getAttribute( rootGroup, RANGE_ATTRIBUTE, int[].class );
 		final int[] iterations = n5.getAttribute( rootGroup, INFERENCE_ITERATIONS_ATTRIBUTE, int[].class );
 		final double[] regularization = n5.getAttribute( rootGroup, REGULARIZATION_ATTRIBUTE, double[].class );
+		final double[] inferenceStepSize = n5.getAttribute( rootGroup, STEP_SIZE_ATTRIBUTE, double[].class );
+		final int[] halos = Optional.ofNullable( n5.getAttribute( rootGroup, HALO_ATTRIBUTE, int[].class ) ).orElse( new int[ ranges.length ] );
 
 		final String root = cmdLineArgs.root;
 		N5Reader rootN5 = N5Helpers.n5( root );
@@ -148,20 +160,22 @@ public class NonPlanarAxialDistortionCorrection
 		try (final JavaSparkContext sc = new JavaSparkContext( conf ))
 		{
 			LogManager.getRootLogger().setLevel( Level.ERROR );
+			sc.setLogLevel( "ERROR" );
 
-			final long[] steps = new long[ 2 ];
-			final long[] radii = new long[ 2 ];
-			final long[] imgDim = LongStream.of( sourceDim ).limit( 2 ).toArray();
-			final long[] imgMax = LongStream.of( imgDim ).map( d -> d - 1 ).toArray();
+			final long[] imgDim = { sourceDim[ 0 ], sourceDim[ 1 ] };
+			final Interval bounds = new FinalInterval( imgDim );
 
-			for ( int d = 0; d < steps.length; ++d )
-			{
-				steps[ d ] = imgDim[ d ];
-				radii[ d ] = steps[ d ] / 2;
-			}
+			final long smallestDim = Math.min( imgDim[ 0 ], imgDim[ 1 ] );
+			final long[] steps = { smallestDim, smallestDim };
+			final long[] radii = { steps[ 0 ] / 2, steps[ 1 ] / 2 };
+			final double[] offset = Arrays.stream( steps ).mapToDouble( s -> 0.5 * s ).toArray();
 
-			long[] previousSteps = imgDim.clone();
+
+			// real world coordinates = step * c + offset - 1/2
+
+			long[] previousSteps = steps.clone();
 			long[] previousRadii = { 0, 0 };
+			double[] previousOffset = { 0, 0 };
 
 			for ( int level = 0; level < ranges.length; ++level )
 			{
@@ -173,44 +187,48 @@ public class NonPlanarAxialDistortionCorrection
 
 				final int range = ranges[ level ];
 
-				final int[] blockSize = Arrays.stream( steps ).mapToInt( l -> ( int ) l ).toArray();
+				final boolean isShiftedByHalfStep = level != 0;
+				final long[] currentDim = gridDims( steps, imgDim, isShiftedByHalfStep );
 
-				final List< long[] > positions = Grids.collectAllOffsets( imgDim, blockSize );
-				final long[] extent = Arrays.stream( radii ).map( r -> 2 * r + 1 ).toArray();
+				final List< long[] > positions = Grids.collectAllOffsets( currentDim, ONES_2D );
 
+				int halo = level < halos.length ? halos[ level ] : 0;
+//				CorrelationBlockSpec.asSpec( positions.get( 0 ), radii, halo, bounds, (pos, d) -> pos * steps[ d ] + offset[ d ] - 0.5 );
+				CorrelationBlockSpec.GridPositionToRealWorld mapper = (pos, d) -> pos * steps[ d ] + offset[ d ] - 0.5;
 				final List< CorrelationBlockSpec > specs = positions
 						.stream()
-						.map( p -> CorrelationBlockSpec.asSpec( p, blockSize, extent, imgMax, true ) )
+						.map( p -> CorrelationBlockSpec.asSpec( p, radii, halo, bounds, mapper ) )
 						.collect( Collectors.toList() );
 
-				final long[] maxPosition = new long[] { 0, 0 };
-				positions
-						.stream()
-						.map( long[]::clone )
-						.map( a -> divide( a, steps, a ) )
-						.forEach( p -> Arrays.setAll( maxPosition, d -> Math.max( maxPosition[ d ], p[ d ] ) ) );
-
-				final long[] currentDim = Arrays.stream( maxPosition ).map( p -> p + 1 ).toArray();
 				final long[] matrixDim = { currentDim[ 0 ], currentDim[ 1 ], 2 * range + 1, sourceDim[ 2 ] };
 
 				final String matrixDataset = rootGroup + SEPARATOR + level + SEPARATOR + MATRICES_DATASET;
 				final String coordinateDataset = rootGroup + SEPARATOR + level + SEPARATOR + FORWARD_DATASET;
 				final String previousCoordinateDataset = rootGroup + SEPARATOR + ( level - 1 ) + SEPARATOR + FORWARD_DATASET;
 
-				if ( cmdLineArgs.generateMatrices || !n5.datasetExists( matrixDataset ) )
+				if ( cmdLineArgs.overwrite || !n5.datasetExists( matrixDataset ) )
 				{
-					makeMatrices( sc, specs, sourceDim, matrixDim, range, sourceRoot, sourceDataset, root, matrixDataset );
+					makeMatrices(
+							sc,
+							specs,
+							sourceDim,
+							matrixDim,
+							range,
+							sourceRoot,
+							sourceDataset,
+							root,
+							matrixDataset );
 				}
 
-				if ( !cmdLineArgs.matricesOnly )
+				if ( !cmdLineArgs.matricesOnly && ( cmdLineArgs.overwrite || !n5.datasetExists( coordinateDataset ) ) )
 				{
 
 					final ScaleAndTranslation previousToWorld = new ScaleAndTranslation(
 							Arrays.stream( previousSteps ).asDoubleStream().toArray(),
-							Arrays.stream( previousRadii ).asDoubleStream().toArray() );
+							Arrays.stream( previousOffset ).map( o -> o - 0.5 ).toArray() );
 					final ScaleAndTranslation currentToWorld = new ScaleAndTranslation(
 							Arrays.stream( steps ).asDoubleStream().toArray(),
-							Arrays.stream( radii ).asDoubleStream().toArray() );
+							Arrays.stream( offset ).map( o -> o - 0.5 ).toArray() );
 
 					final ScaleAndTranslation previousToCurrent = currentToWorld.inverse().concatenate( previousToWorld );
 
@@ -223,10 +241,12 @@ public class NonPlanarAxialDistortionCorrection
 					List< long[] > inferenceBlocks = Grids.collectAllOffsets( currentDim, new int[] { 1, 1 } );
 
 					JavaRDD< Interval > inferenceBlocksRdd = sc
-							.parallelize( inferenceBlocks )
+							.parallelize( inferenceBlocks, Math.min( inferenceBlocks.size(), sc.defaultParallelism() ) )
 							.map( min -> {
-								long[] max = new long[ min.length ];
-								Arrays.setAll( max, d -> Math.min( min[ d ] + blockSize[ d ], currentDim[ d ] ) - 1 );
+								long[] max = min.clone();
+								// long[] max = new long[ min.length ];
+								// Arrays.setAll( max, d -> Math.min( min[ d ] +
+								// blockSize[ d ], currentDim[ d ] ) - 1 );
 								return new FinalInterval( min, max );
 							} );
 
@@ -241,14 +261,30 @@ public class NonPlanarAxialDistortionCorrection
 					// update steps and radii
 					Arrays.setAll( previousSteps, d -> steps[ d ] );
 					Arrays.setAll( previousRadii, d -> radii[ d ] );
+					Arrays.setAll( previousOffset, d -> offset[ d ] );
 
 					Options options = Options.generateDefaultOptions();
 					options.comparisonRange = range;
-					options.shiftProportion = 1 - ( level < regularization.length ? regularization[ level ] : lastRegularization / 2.0 );
+					options.shiftProportion = level < inferenceStepSize.length ? inferenceStepSize[ level ] : 0.5; // 1
+																													// -
+																													// (
+																													// level
+																													// <
+																													// regularization.length
+																													// ?
+																													// regularization[
+																													// level
+																													// ]
+																													// :
+																													// lastRegularization
+																													// /
+																													// 2.0
+																													// );
 					options.nIterations = level < iterations.length ? iterations[ level ] : Math.max( lastIteration / 2, 1 );
-					options.regularizationType = level == 0 ? RegularizationType.NONE : RegularizationType.NONE;
+					options.regularizationType = level == 0 ? RegularizationType.BORDER : RegularizationType.NONE;
+					options.coordinateUpdateRegularizerWeight = level < regularization.length ? regularization[ level ] : 1 - 0.5 * ( 1 - lastRegularization );
 					options.withReorder = false;
-					lastRegularization = level < regularization.length ? regularization[ level ] : 1 - options.shiftProportion;
+					lastRegularization = options.coordinateUpdateRegularizerWeight;
 					lastIteration = options.nIterations;
 
 					final JavaRDD< RandomAccessibleInterval< DoubleType > > newCoordinates =
@@ -271,6 +307,7 @@ public class NonPlanarAxialDistortionCorrection
 				{
 					steps[ d ] = Math.max( steps[ d ] / 2, 1 );
 					radii[ d ] = Math.max( steps[ d ] / 2, 1 );
+					offset[ d ] = 0;
 				}
 
 			}
@@ -529,10 +566,20 @@ public class NonPlanarAxialDistortionCorrection
 
 	public static Supplier< RandomAccessibleInterval< RandomAccessibleInterval< DoubleType > > > collapsedMatrixSupplier(
 			final String n5,
-			final String dataset
-	)
+			final String dataset )
 	{
 		return new CollapsedRandomAccessibleIntervalSupplier<>( new DoubleDataSupplier( n5, dataset ), 2 );
+	}
+
+	public static long[] gridDims( final long[] step, final long[] dim, final boolean isShiftedByHalfStep )
+	{
+		long[] gridDims = new long[ dim.length ];
+		for ( int d = 0; d < dim.length; ++d )
+		{
+			long s = step[ d ];
+			gridDims[ d ] = ( long ) Math.ceil( ( dim[ d ] + ( isShiftedByHalfStep ? 0.5 * s : 0 ) ) * 1.0 / s );
+		}
+		return gridDims;
 	}
 
 }

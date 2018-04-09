@@ -49,6 +49,14 @@ public class CreateProject
 				description = "Regularization to previous result." )
 		private double[] regularization;
 
+		@Option(
+				names = { "-s", "--step-size" },
+				required = true,
+				split = ",",
+				description = "Maximal update step."
+				)
+		private double[] stepSize;
+
 		@Option( names = { "-h", "--help" }, usageHelp = true, description = "Show this help message and exit." )
 		private boolean helpRequested;
 
@@ -89,6 +97,7 @@ public class CreateProject
 		n5.setAttribute( arguments.group, NonPlanarAxialDistortionCorrection.RANGE_ATTRIBUTE, arguments.range );
 		n5.setAttribute( arguments.group, NonPlanarAxialDistortionCorrection.INFERENCE_ITERATIONS_ATTRIBUTE, arguments.inferenceIterations );
 		n5.setAttribute( arguments.group, NonPlanarAxialDistortionCorrection.REGULARIZATION_ATTRIBUTE, arguments.regularization );
+		n5.setAttribute( arguments.group, NonPlanarAxialDistortionCorrection.STEP_SIZE_ATTRIBUTE, arguments.stepSize );
 	}
 
 }
